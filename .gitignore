@@ -1,0 +1,14 @@
+# reference clones of upstream repos (not part of this project)
+vendor/
+
+# python
+bridge/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# arduino build artifacts
+firmware/**/build/
+
+# macOS
+.DS_Store

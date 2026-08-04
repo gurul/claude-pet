@@ -1,0 +1,247 @@
+"""Entry point. `cc-buddy-bridge [daemon|install|uninstall|status]`."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import asyncio
+import logging
+import signal
+import sys
+
+from . import __version__
+from .daemon import Daemon
+from .ipc import make_transport
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="cc-buddy-bridge")
+    parser.add_argument("--version", action="version", version=f"cc-buddy-bridge {__version__}")
+    sub = parser.add_subparsers(dest="cmd")
+
+    p_daemon = sub.add_parser("daemon", help="Run the bridge daemon (connects to BLE device, serves hooks)")
+    p_daemon.add_argument("--socket", default=None, help="IPC path or host:port override")
+    p_daemon.add_argument("--device-name", default="Claude", help="BLE name prefix to match (default: Claude)")
+    p_daemon.add_argument("--device-address", default=None, help="BLE address to connect to (skips scan)")
+    p_daemon.add_argument(
+        "--serial-port",
+        default=os.environ.get("CC_BUDDY_SERIAL_PORT") or None,
+        help="USB serial port of the buddy (e.g. /dev/cu.usbmodem*). Uses serial instead of BLE.",
+    )
+    p_daemon.add_argument("--log-level", default="INFO")
+
+    p_install = sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
+    p_install.add_argument(
+        "--service", action="store_true",
+        help="Install a user-level service so the daemon auto-starts on login "
+             "(macOS: launchd agent; Linux: systemd user unit) instead of registering hooks",
+    )
+    p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
+    p_uninstall.add_argument(
+        "--service", action="store_true",
+        help="Remove the user-level service (launchd agent / systemd unit) instead of removing hooks",
+    )
+    sub.add_parser("status", help="Show install status")
+
+    p_hud = sub.add_parser(
+        "hud",
+        help="Print a one-line stick status summary (stdout; designed for Claude Code's statusLine)",
+    )
+    p_hud.add_argument("--ascii", action="store_true", help="ASCII-only output (no emoji)")
+    p_hud.add_argument("--socket", default=None, help="IPC path or host:port override")
+
+    sub.add_parser(
+        "unpair",
+        help="Clear the stick's stored BLE bond (you must also Forget on the macOS side afterwards)",
+    )
+
+    p_push = sub.add_parser(
+        "push-character",
+        help="Upload a GIF character pack folder to the stick (manifest.json + *.gif)",
+    )
+    p_push.add_argument("path", help="Path to the character folder")
+
+    p_update = sub.add_parser(
+        "check-update",
+        help="Check GitHub for a newer cc-buddy-bridge release (forces refresh)",
+    )
+    p_update.add_argument("--no-cache", action="store_true",
+                          help="Ignore cache; always hit the network (default already does)")
+
+    p_upgrade = sub.add_parser(
+        "update",
+        help="Pull latest release, reinstall the package, and restart the daemon",
+    )
+    p_upgrade.add_argument("-y", "--yes", action="store_true",
+                           help="Skip the confirmation prompt")
+
+    p_audit = sub.add_parser(
+        "audit",
+        help="Show the PreToolUse decision audit log (tail + filter + follow)",
+    )
+    p_audit.add_argument("-n", "--last", type=int, default=20, help="Show the last N entries (default 20; 0 = all)")
+    p_audit.add_argument("-f", "--follow", action="store_true", help="Stream new entries as they're written")
+    p_audit.add_argument("--decision", choices=["allow", "deny"], help="Filter by final decision")
+    p_audit.add_argument("--source", choices=["auto_allow", "stick", "timeout", "defer", "ble_disconnected"],
+                         help="Filter by decision source")
+    p_audit.add_argument("--tool", help="Filter by tool name (Bash, Edit, ...)")
+    p_audit.add_argument("--ascii", action="store_true", help="ASCII-only output (no colour)")
+    p_audit.add_argument("--path", action="store_true", help="Print the audit log path and exit")
+
+    args = parser.parse_args(argv)
+    if args.cmd is None:
+        parser.print_help()
+        return 1
+
+    if args.cmd == "daemon":
+        return _run_daemon(args)
+    if args.cmd == "install":
+        if getattr(args, "service", False):
+            from .service import install_service
+            return install_service()
+        from .installer import install_hooks
+        return install_hooks()
+    if args.cmd == "uninstall":
+        if getattr(args, "service", False):
+            from .service import uninstall_service
+            return uninstall_service()
+        from .installer import uninstall_hooks
+        return uninstall_hooks()
+    if args.cmd == "status":
+        from .installer import show_status
+        return show_status()
+    if args.cmd == "hud":
+        from .hud import run as hud_run
+        return hud_run(ascii_only=args.ascii, socket_path=args.socket)
+    if args.cmd == "unpair":
+        return _run_unpair()
+    if args.cmd == "push-character":
+        return _run_push_character(args.path)
+    if args.cmd == "audit":
+        from .audit import default_path, render
+        if args.path:
+            print(default_path())
+            return 0
+        return render(
+            last=args.last,
+            decision=args.decision,
+            source=args.source,
+            tool=args.tool,
+            ascii_only=args.ascii,
+            follow=args.follow,
+        )
+    if args.cmd == "check-update":
+        from .version_check import check, render_cli
+        info = check(force=True)
+        print(render_cli(info))
+        return 1 if info.has_update else 0
+    if args.cmd == "update":
+        from .update import run_update
+        return run_update(yes=args.yes)
+
+    return 1
+
+
+def _run_daemon(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    # Refuse to start if another daemon is already listening on this IPC
+    # address. A stale Unix socket is safe to remove and proceed.
+    try:
+        transport = make_transport(args.socket)
+    except ValueError as e:
+        print(f"cc-buddy-bridge: invalid IPC address: {e}", file=sys.stderr)
+        return 2
+    if transport.is_in_use():
+        print(
+            f"cc-buddy-bridge: another daemon is already listening at {transport.address}.\n"
+            f"  Stop it first, or pass --socket to use a different path.",
+            file=sys.stderr,
+        )
+        return 2
+
+    daemon = Daemon(
+        socket_path=args.socket,
+        device_name_prefix=args.device_name,
+        device_address=args.device_address,
+        serial_port=args.serial_port,
+    )
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    def _sigterm(*_: object) -> None:
+        asyncio.ensure_future(daemon.shutdown(), loop=loop)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _sigterm)
+        except NotImplementedError:
+            pass
+
+    try:
+        loop.run_until_complete(daemon.run())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
+    return 0
+
+
+def _run_push_character(path: str) -> int:
+    from .hooks._client import post
+
+    # Pushing a full 1.8 MB pack at BLE speeds can take 1-2 minutes with the
+    # per-chunk ack requirement. Give the IPC call plenty of headroom.
+    resp = post({"evt": "push_character", "path": path}, timeout=600.0)
+    if resp is None:
+        print(
+            "cc-buddy-bridge: daemon not reachable. Start it first.",
+            file=sys.stderr,
+        )
+        return 2
+    if not resp.get("ok"):
+        print(f"push failed: {resp.get('error', 'unknown')}", file=sys.stderr)
+        return 2
+
+    name = resp.get("name", "?")
+    files = resp.get("files", 0)
+    size = resp.get("total_bytes", 0)
+    print(f"pushed '{name}': {files} files, {size:,} bytes")
+    print("the stick has switched to the new character.")
+    return 0
+
+
+def _run_unpair() -> int:
+    """Tell the running daemon to send cmd:unpair to the stick."""
+    from .hooks._client import post
+
+    resp = post({"evt": "unpair"}, timeout=2.0)
+    if resp is None:
+        print(
+            "cc-buddy-bridge: daemon not reachable. Start it with "
+            "`cc-buddy-bridge daemon` (or via the launchd agent).",
+            file=sys.stderr,
+        )
+        return 2
+    if not resp.get("ok"):
+        err = resp.get("error", "unknown")
+        print(f"cc-buddy-bridge: unpair failed ({err})", file=sys.stderr)
+        return 2
+
+    print("sent cmd:unpair to the stick; its stored bond is cleared.")
+    print("")
+    print("Next: open macOS System Settings > Bluetooth > Claude-5C66 > info")
+    print("'Forget This Device' to purge the cached LTK. Then the next reconnect")
+    print("will prompt for a fresh 6-digit passkey (displayed on the stick).")
+    print("")
+    print("Watch `tail -f ~/Library/Logs/cc-buddy-bridge.log` for the moment of truth:")
+    print("  \"stick link: ENCRYPTED (was None)\"")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

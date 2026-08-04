@@ -1,0 +1,724 @@
+"""Main daemon: wires IPC, BLE, state, and JSONL tailer together."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+from .audit import AuditLog
+from .ble import BuddyBLE
+from .ipc import IPCServer
+from .jsonl_tailer import JSONLTailer
+from .matchers import MatcherConfig, classify_command
+from .matchers import load_config as load_matcher_config
+from .protocol import (
+    ENTRY_MAX_BYTES,
+    HEARTBEAT_KEEPALIVE,
+    build_heartbeat,
+    build_time_sync,
+    truncate_utf8_bytes,
+)
+from .state import State
+from .version_check import check as version_check
+
+# Entry text is prefixed with a 2-byte marker ("> ", "@ ", "+ ") before being
+# stored. Budget the user-supplied portion so the full entry stays within the
+# firmware's line buffer without _format_entry needing to re-truncate.
+_ENTRY_PAYLOAD_MAX_BYTES = ENTRY_MAX_BYTES - 2
+
+log = logging.getLogger(__name__)
+
+# Hook timeout for a permission decision on the stick. REFERENCE.md says the
+# desktop app keeps the prompt up indefinitely, but hooks have a finite timeout.
+# Default hook timeout is 600s; we cap lower so that a forgotten decision falls
+# back to Claude Code's normal approval UI rather than freezing the session.
+PERMISSION_WAIT_SECS = 300.0
+
+
+class Daemon:
+    def __init__(
+        self,
+        socket_path: Optional[str] = None,
+        device_name_prefix: str = "Claude",
+        device_address: Optional[str] = None,
+        matchers: Optional[MatcherConfig] = None,
+        serial_port: Optional[str] = None,
+    ) -> None:
+        self.state = State()
+        self.ipc = IPCServer(self._handle_ipc, socket_path=socket_path) if socket_path else IPCServer(self._handle_ipc)
+        if serial_port:
+            # USB CDC transport (Freenove FNK0104B port): same wire protocol,
+            # different pipe. Kept on the .ble attribute so the rest of the
+            # daemon doesn't care which transport is live.
+            from .serial_transport import BuddySerial
+            self.ble = BuddySerial(on_message=self._handle_ble, port=serial_port)
+        else:
+            self.ble = BuddyBLE(
+                on_message=self._handle_ble,
+                name_prefix=device_name_prefix,
+                address=device_address,
+            )
+        self.jsonl = JSONLTailer(self._on_tokens, on_assistant_text=self._on_assistant_text)
+        self.matchers = matchers if matchers is not None else load_matcher_config()
+        # Per-decision append-only log; see audit.py
+        self.audit = AuditLog()
+        # tool_use_id → Future resolving to "allow" | "deny"
+        self._permission_futures: dict[str, asyncio.Future[str]] = {}
+        # transcript_path → hash of the last assistant content we emitted as an
+        # entry. Used to distinguish "fresh turn" from "re-read old content"
+        # when the transcript file hasn't been flushed yet.
+        self._last_emitted_turn_key: dict[str, str] = {}
+        # session_id → task that'll flip running→0 after a grace window.
+        # Delays the turn_end so the stick's HUD stays drawn long enough to
+        # display the @-entry the tailer just emitted. See firmware's
+        # drawHUD/clocking gate in main.cpp.
+        self._pending_turn_ends: dict[str, asyncio.Task] = {}
+        # Cached stick-side status fields from the most recent status ack.
+        self._last_stick_sec: Optional[bool] = None
+        self._last_stick_battery_pct: Optional[int] = None
+        # Futures awaiting a specific ack type. Used by folder_push's
+        # chunk-by-chunk flow control. Each entry: (ack_type, Future).
+        self._ack_waiters: list[tuple[str, asyncio.Future]] = []
+        # Track last heartbeat to dedupe (avoid spamming BLE with identical snapshots).
+        self._last_hb_serialized: Optional[str] = None
+        self._last_hb_sent_at: float = 0.0
+        # Latest available version string (e.g. "v0.1.1") when an update is
+        # available; None otherwise. Set by _update_check_loop.
+        self._update_available: Optional[str] = None
+        # Wire codec for heartbeat string fields. Set when the user has
+        # flashed the fork-only CJK firmware variant (`m5stickc-plus-cjk-*`)
+        # and tells the bridge which one via env var. None = stock firmware,
+        # ASCII-only content. See protocol.CJK_CODECS for the mapping.
+        from .protocol import CJK_CODECS
+        _target = os.environ.get("CC_BUDDY_CJK_TARGET", "").strip()
+        self._cjk_codec: Optional[str] = CJK_CODECS.get(_target) if _target else None
+        if self._cjk_codec is not None:
+            log.info("cjk firmware target=%s, wire codec=%s", _target, self._cjk_codec)
+        self._shutdown = asyncio.Event()
+
+    # ---- entry ----
+
+    async def run(self) -> None:
+        _log_permission_config_summary(self.matchers)
+        await self.ipc.start()
+        tasks = [
+            asyncio.create_task(self.ipc.serve_forever(), name="ipc"),
+            asyncio.create_task(self.ble.run(), name="ble"),
+            asyncio.create_task(self.jsonl.run(), name="jsonl"),
+            asyncio.create_task(self._heartbeat_loop(), name="heartbeat"),
+            asyncio.create_task(self._on_ble_connected(), name="on-connect"),
+            asyncio.create_task(self._status_poller(), name="status-poller"),
+            asyncio.create_task(self._update_check_loop(), name="update-check"),
+        ]
+        try:
+            await self._shutdown.wait()
+        finally:
+            for t in tasks:
+                t.cancel()
+            for pend in list(self._pending_turn_ends.values()):
+                if not pend.done():
+                    pend.cancel()
+            await asyncio.gather(*tasks, *self._pending_turn_ends.values(),
+                                 return_exceptions=True)
+            await self.ble.stop()
+            await self.ipc.stop()
+
+    async def shutdown(self) -> None:
+        self._shutdown.set()
+
+    # ---- heartbeat loop ----
+
+    async def _heartbeat_loop(self) -> None:
+        while not self._shutdown.is_set():
+            await self._push_heartbeat()
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=HEARTBEAT_KEEPALIVE)
+            except asyncio.TimeoutError:
+                continue
+
+    async def _push_heartbeat(self, force: bool = False) -> None:
+        import json
+
+        snap = build_heartbeat(self.state, codec=self._cjk_codec)
+        # Dedup key is the Python-side serialized snapshot, not the wire bytes
+        # — same dict means same content regardless of wire codec.
+        serialized = json.dumps(snap, sort_keys=True, ensure_ascii=False)
+        now = time.monotonic()
+        changed = serialized != self._last_hb_serialized
+        stale = (now - self._last_hb_sent_at) >= HEARTBEAT_KEEPALIVE
+        if not (force or changed or stale):
+            return
+        if self.ble.connected:
+            log.debug(
+                "heartbeat: %d bytes, entries=%d (last=%r), force=%s, changed=%s",
+                len(serialized), len(snap.get("entries", [])),
+                snap["entries"][-1] if snap.get("entries") else None,
+                force, changed,
+            )
+            ok = await self.ble.send(snap, codec=self._cjk_codec)
+            if ok:
+                self._last_hb_serialized = serialized
+                self._last_hb_sent_at = now
+            else:
+                log.warning("heartbeat: ble.send returned failure")
+
+    async def _on_ble_connected(self) -> None:
+        """On every (re)connect, emit time sync + force a heartbeat + kick
+        a status poll so we learn the link's encryption state right away."""
+        while not self._shutdown.is_set():
+            await self.ble.wait_connected()
+            # Guard against a stale connected-event: if we woke but the link is
+            # already gone (the event was set but cleared a beat later, or a
+            # teardown race), don't fire sends into a dead link and spin. Sleep
+            # briefly and re-wait instead of looping with no delay.
+            if not self.ble.connected:
+                await asyncio.sleep(0.5)
+                continue
+            await self.ble.send(build_time_sync())
+            await self._push_heartbeat(force=True)
+            await self.ble.send({"cmd": "status"})
+            # Wait for the connection to drop before waiting again.
+            while self.ble.connected and not self._shutdown.is_set():
+                await asyncio.sleep(1.0)
+
+    async def _status_poller(self) -> None:
+        """Periodically ask the stick for its status so we track sec/battery.
+        Ack handling lives in _handle_ble (ack:"status" branch)."""
+        POLL_INTERVAL = 60.0
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=POLL_INTERVAL)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self.ble.connected:
+                await self.ble.send({"cmd": "status"})
+
+    async def _update_check_loop(self) -> None:
+        """Poll GitHub releases once at startup, then every 24 hours.
+
+        Network calls happen on a thread so the asyncio loop isn't blocked by
+        urllib's sync IO. Failures are logged at DEBUG and we just retry next
+        cycle — never raise, never crash the daemon.
+        """
+        INTERVAL = 24 * 3600
+        # First check is on startup (uses cache if fresh) so the hud has a
+        # value to display immediately.
+        first = True
+        while not self._shutdown.is_set():
+            info = await asyncio.to_thread(version_check, force=not first)
+            self._update_available = info.latest if info.has_update else None
+            if info.has_update and first:
+                log.info(
+                    "update available: %s → %s (you're on the latest cached info; "
+                    "see https://github.com/SnowWarri0r/cc-buddy-bridge/releases)",
+                    info.current, info.latest,
+                )
+            first = False
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=INTERVAL)
+                return
+            except asyncio.TimeoutError:
+                pass
+
+    # ---- IPC handler ----
+
+    async def _handle_ipc(self, req: dict[str, Any]) -> dict[str, Any]:
+        evt = req.get("evt")
+        # Drop pretooluse from the trace: it has its own dedicated INFO log,
+        # and the volume would drown out everything else. get_state is the
+        # hud polling — also too chatty to be useful here.
+        if evt not in ("pretooluse", "get_state"):
+            log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
+        if evt == "session_start":
+            self.state.session_start(
+                req["session_id"],
+                transcript_path=req.get("transcript_path"),
+                cwd=req.get("cwd"),
+            )
+            await self._push_heartbeat()
+            return {"ok": True}
+
+        if evt == "session_end":
+            self.state.session_end(req["session_id"])
+            await self._push_heartbeat()
+            return {"ok": True}
+
+        if evt == "turn_begin":
+            session_id = req["session_id"]
+            # A new user prompt cancels any pending deferred turn_end.
+            pending = self._pending_turn_ends.pop(session_id, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
+            # Also kill any active celebrate pulse — user moved on.
+            self.state.completed_until = 0.0
+            self.state.session_start(session_id)  # idempotent
+            self.state.turn_begin(session_id)
+            prompt = req.get("prompt")
+            if isinstance(prompt, str) and prompt:
+                self.state.add_entry(f"> {truncate_utf8_bytes(prompt, _ENTRY_PAYLOAD_MAX_BYTES)}")
+            await self._push_heartbeat()
+            return {"ok": True}
+
+        if evt == "turn_end":
+            # Don't flip running→0 immediately; the firmware enters clock mode
+            # as soon as running+waiting both hit zero, which blanks the
+            # transcript HUD before the user has a chance to read the entry
+            # we just added. Schedule the flip 15s out — long enough to read,
+            # short enough that idle really does clock. A new turn_begin
+            # cancels the scheduled task.
+            session_id = req["session_id"]
+            previous = self._pending_turn_ends.get(session_id)
+            if previous is not None and not previous.done():
+                previous.cancel()
+            self._pending_turn_ends[session_id] = asyncio.create_task(
+                self._deferred_turn_end(session_id, delay=15.0)
+            )
+            # Trigger the firmware's celebrate animation for a few seconds.
+            # Set the pulse state synchronously so the heartbeat snapshot is
+            # correct before anything is pushed.
+            CELEBRATE_SECS = 5.0
+            self.state.pulse_completed(duration_secs=CELEBRATE_SECS)
+            # Kick off the BLE push in the background so this coroutine can
+            # return {"ok": True} immediately — the Stop hook caller must not
+            # block on _push_heartbeat(force=True) or it surfaces as ETIMEDOUT
+            # in the plugin's spawnSync call.
+            asyncio.create_task(self._turn_end_side_effects(CELEBRATE_SECS))
+            return {"ok": True}
+
+        if evt == "pretooluse":
+            return await self._handle_pretooluse(req)
+
+        if evt == "push_character":
+            path = req.get("path")
+            if not isinstance(path, str) or not path:
+                return {"ok": False, "error": "missing 'path'"}
+            if not self.ble.connected:
+                return {"ok": False, "error": "ble not connected"}
+            try:
+                from .folder_push import push_character
+                result = await push_character(self, path)
+            except Exception as e:  # noqa: BLE001
+                log.exception("push_character failed")
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            return {"ok": True, **result}
+
+        if evt == "unpair":
+            # Tell the stick to erase its stored bond so the next pairing
+            # shows a fresh passkey (REFERENCE.md §Security and pairing).
+            # Macos side still needs a manual 'Forget' from System Settings.
+            if not self.ble.connected:
+                return {"ok": False, "error": "ble not connected"}
+            ok = await self.ble.send({"cmd": "unpair"})
+            log.info("unpair: sent cmd:unpair to stick (ble write %s)",
+                     "ok" if ok else "fail")
+            return {"ok": bool(ok)}
+
+        if evt == "get_state":
+            # Queried by the `cc-buddy-bridge hud` subcommand (or anyone else
+            # who wants a one-shot snapshot). Kept small on purpose.
+            pending = self.state.first_pending()
+            return {
+                "ok": True,
+                "state": {
+                    "ble_connected": self.ble.connected,
+                    "sec": self._last_stick_sec,
+                    "battery_pct": self._last_stick_battery_pct,
+                    "total": self.state.total,
+                    "running": self.state.running_count,
+                    "waiting": self.state.waiting_count,
+                    "tokens_cumulative": self.state.tokens_cumulative,
+                    "tokens_today": self.state.tokens_today,
+                    "cost_cumulative": self.state.cost_cumulative,
+                    "cost_today": self.state.cost_today,
+                    "update_available": self._update_available,
+                    "pending_tool": pending.tool_name if pending else None,
+                    "last_entry": self.state.entries[0].text if self.state.entries else "",
+                },
+            }
+
+        if evt == "posttooluse":
+            # Clear any lingering pending (defensive; normally cleared in _handle_pretooluse).
+            self.state.permission_resolved(req.get("tool_use_id", ""))
+            tool_name = req.get("tool_name")
+            if isinstance(tool_name, str):
+                self.state.add_entry(f"+ {tool_name}")
+            await self._push_heartbeat()
+            return {"ok": True}
+
+        return {"ok": False, "error": f"unknown evt: {evt!r}"}
+
+    async def _handle_pretooluse(self, req: dict[str, Any]) -> dict[str, Any]:
+        tool_use_id = req.get("tool_use_id")
+        if not isinstance(tool_use_id, str) or not tool_use_id:
+            return {"ok": False, "error": "missing tool_use_id"}
+        session_id = req.get("session_id") or "unknown"
+        tool_name = req.get("tool_name") or "tool"
+        hint = req.get("hint") or ""
+
+        # Smart matcher: classify trivial / risky commands before the BLE round-trip.
+        # auto_allow → approve immediately, no stick prompt (keeps ls/cat fast).
+        # always_ask → force stick prompt even if Claude Code would auto-approve.
+        # default    → no decision, let Claude Code's native permission flow run.
+        decision_class = classify_command(hint, self.matchers)
+        audit_kwargs = dict(
+            session_id=session_id, tool_name=tool_name, hint=hint, matcher=decision_class,
+        )
+        if decision_class == "allow":
+            log.info("pretooluse for %s (%s): auto_allow match → allow", tool_name, hint[:60])
+            self.audit.record(**audit_kwargs, decision="allow", source="auto_allow")
+            return {"ok": True, "decision": "allow"}
+
+        # If BLE isn't connected, skip the round-trip and return no decision so
+        # Claude Code's normal flow runs (respects user's auto/allow settings).
+        if not self.ble.connected:
+            log.info("pretooluse for %s: ble not connected, deferring to default flow", tool_name)
+            self.audit.record(**audit_kwargs, decision=None, source="ble_disconnected")
+            return {"ok": True}
+
+        # Unknown commands don't force a button press — defer to Claude Code's
+        # native flow (which may auto-approve under `permissions.defaultMode=auto`).
+        # Only always_ask patterns surface on the stick.
+        if decision_class == "default":
+            log.info("pretooluse for %s (%s): no matcher → defer to default", tool_name, hint[:60])
+            self.audit.record(**audit_kwargs, decision=None, source="defer")
+            return {"ok": True}
+
+        log.info(
+            "permission request: tool=%s id=%s hint=%r waiting up to %.0fs",
+            tool_name, tool_use_id, hint[:80], PERMISSION_WAIT_SECS,
+        )
+        pending = self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._permission_futures[tool_use_id] = fut
+        source = "stick"
+        try:
+            await self._push_heartbeat(force=True)
+            try:
+                decision = await asyncio.wait_for(fut, timeout=PERMISSION_WAIT_SECS)
+                elapsed = time.monotonic() - pending.issued_at
+                log.info(
+                    "permission resolved: id=%s decision=%s (%.1fs)",
+                    tool_use_id, decision, elapsed,
+                )
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - pending.issued_at
+                log.warning(
+                    "permission timeout: id=%s tool=%s after %.1fs → falling back to 'ask'",
+                    tool_use_id, tool_name, elapsed,
+                )
+                decision = "ask"
+                source = "timeout"
+        finally:
+            self._permission_futures.pop(tool_use_id, None)
+            self.state.permission_resolved(tool_use_id)
+            await self._push_heartbeat()
+        self.audit.record(
+            **audit_kwargs, decision=decision, source=source, elapsed_s=elapsed,
+        )
+        return {"ok": True, "decision": decision}
+
+    # ---- BLE handler ----
+
+    async def _handle_ble(self, obj: dict[str, Any]) -> None:
+        cmd = obj.get("cmd")
+        if cmd == "permission":
+            tool_use_id = obj.get("id")
+            decision = obj.get("decision")
+            if decision not in ("once", "deny"):
+                log.warning("ignoring permission with unknown decision: %r", obj)
+                return
+            # Map REFERENCE.md's "once" to Claude Code's "allow".
+            mapped = "allow" if decision == "once" else "deny"
+            fut = self._permission_futures.get(tool_use_id or "")
+            if fut is not None and not fut.done():
+                log.info(
+                    "permission button press: id=%s → %s (stick sent %r)",
+                    tool_use_id, mapped, decision,
+                )
+                fut.set_result(mapped)
+            else:
+                log.info(
+                    "permission %s received for id=%s but no pending request (timed out or already resolved)",
+                    decision, tool_use_id,
+                )
+            return
+
+        # Status acks come back from the device after we poll with {"cmd":"status"}.
+        # Shape per REFERENCE.md: {"ack":"status","ok":true,"data":{"name","sec","bat":{...},"sys":{...},"stats":{...}}}.
+        ack = obj.get("ack")
+        if ack == "status" and obj.get("ok"):
+            data = obj.get("data") or {}
+            sec = data.get("sec")
+            if sec is not None and sec != self._last_stick_sec:
+                log.info(
+                    "stick link: %s (was %s)",
+                    "ENCRYPTED" if sec else "UNENCRYPTED — transcript sniffable!",
+                    self._last_stick_sec,
+                )
+                self._last_stick_sec = bool(sec)
+            bat = data.get("bat") or {}
+            if isinstance(bat, dict) and bat:
+                pct = bat.get("pct")
+                ma = bat.get("mA")
+                if isinstance(pct, int) and pct != self._last_stick_battery_pct:
+                    charging = "+" if isinstance(ma, int) and ma < 0 else " "
+                    log.info("stick battery: %d%% %s", pct, charging)
+                    self._last_stick_battery_pct = pct
+            sys_info = data.get("sys") or {}
+            if isinstance(sys_info, dict):
+                free = sys_info.get("fsFree")
+                total = sys_info.get("fsTotal")
+                if isinstance(free, int) and isinstance(total, int):
+                    if total == 0:
+                        # LittleFS isn't mounted. Firmware calls begin(false),
+                        # so an un-formatted partition reports 0/0. push-character
+                        # will fail with "have 0K" until the user factory-resets
+                        # the stick (hold A → settings → reset → factory reset),
+                        # which runs LittleFS.format().
+                        log.error(
+                            "stick LittleFS appears unformatted (fsTotal=0). "
+                            "Run factory reset on the stick to format it; "
+                            "push-character will reject until then."
+                        )
+                    else:
+                        log.info("stick fs: %d/%d bytes free (%.0f%%)",
+                                 free, total, 100.0 * free / total)
+            return
+
+        # Route any ack (status already handled above, but others — char_begin,
+        # file, chunk, file_end, char_end, name, owner, unpair, etc.) to the
+        # oldest waiter that registered for that ack type.
+        if ack is not None:
+            for waiter_type, fut in self._ack_waiters:
+                if waiter_type == ack and not fut.done():
+                    fut.set_result(obj)
+                    break
+            return
+
+        if cmd in {"name", "owner", "unpair", "char_begin", "char_end", "file", "file_end", "chunk"}:
+            # We're the central; we don't send these, but acknowledge defensively.
+            return
+
+        if obj.get("ack") is not None:
+            return  # device acknowledging something we sent
+
+        log.debug("ble: unhandled %r", obj)
+
+    # ---- JSONL callback ----
+
+    async def _on_tokens(
+        self,
+        cumulative: int,
+        today: int,
+        cost_cumulative: float,
+        cost_today: float,
+        _entries: list,
+    ) -> None:
+        self.state.set_tokens(cumulative, today, cost_cumulative, cost_today)
+        await self._push_heartbeat()
+
+    async def _on_assistant_text(self, _transcript_path: str, text: str, _uuid: str) -> None:
+        """Fired by the JSONL tailer the moment a new assistant text record
+        lands on disk (typically <500 ms after Claude Code finishes the
+        message). Emitting here beats the Stop hook, so the stick receives
+        the '@ ...' entry while the user is still looking at the terminal —
+        before auto-off kicks in."""
+        self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
+        log.info("tailer: new assistant text → entry added (state.entries=%d)",
+                 len(self.state.entries))
+        await self._push_heartbeat(force=True)
+
+    async def _turn_end_side_effects(self, celebrate_secs: float) -> None:
+        """Post-response work for a turn_end event, run as a background task.
+
+        Runs *after* the IPC ``{"ok": True}`` reply has been sent, so the Stop
+        hook's spawnSync call never waits on a BLE write.
+
+        1. Force-push the heartbeat carrying ``completed=true`` so the stick's
+           celebrate animation fires within ~50 ms of the turn ending.
+        2. Schedule a follow-up push at pulse end so ``completed`` flips back
+           to false on time rather than waiting for the next keepalive.
+        """
+        try:
+            await self._push_heartbeat(force=True)
+        except Exception:  # noqa: BLE001
+            log.exception("turn_end side effects: _push_heartbeat(force=True) failed")
+        asyncio.create_task(self._heartbeat_after(celebrate_secs + 0.1))
+
+    async def _heartbeat_after(self, delay: float) -> None:
+        """Schedule one heartbeat push after ``delay`` seconds. Used by the
+        celebrate-pulse logic to flush the completed=false transition right
+        when the pulse expires, instead of waiting for the next keepalive."""
+        try:
+            await asyncio.sleep(delay)
+            await self._push_heartbeat(force=True)
+        except asyncio.CancelledError:
+            return
+
+    async def _deferred_turn_end(self, session_id: str, delay: float) -> None:
+        """Delay the state.turn_end so that running>0 keeps the firmware out of
+        clock mode long enough to render the @-entry the tailer just pushed."""
+        try:
+            await asyncio.sleep(delay)
+            self.state.turn_end(session_id)
+            await self._push_heartbeat()
+        except asyncio.CancelledError:
+            return
+        finally:
+            # Self-cleanup. If a new turn_begin already replaced the task, the
+            # pop returns that task instead — ignore the mismatch.
+            current = self._pending_turn_ends.get(session_id)
+            if current is not None and current.done():
+                self._pending_turn_ends.pop(session_id, None)
+
+    # ---- turn event ----
+
+    async def wait_for_ack(self, ack_type: str, timeout: float = 5.0) -> dict[str, Any]:
+        """Block until we receive an ack matching ``ack_type``. Used by the
+        folder-push flow — the firmware requires a per-chunk ack before we
+        send the next chunk, since its UART RX buffer is only ~256 bytes."""
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        entry = (ack_type, fut)
+        self._ack_waiters.append(entry)
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            try:
+                self._ack_waiters.remove(entry)
+            except ValueError:
+                pass
+
+    async def _emit_turn_event(self, transcript_path: str) -> None:
+        """On turn_end: mirror the latest assistant text into the heartbeat's
+        ``entries`` list so the stick's transcript view shows it.
+
+        The reference firmware silently drops {"evt":"turn"} events (its JSON
+        parser only reads heartbeat fields), so the only thing that actually
+        shows up for the user is the synthetic entry we add below.
+
+        Polls for fresh content: Claude Code flushes assistant records to the
+        transcript JSONL *after* the Stop hook fires, so a naive read grabs
+        the PREVIOUS turn's content. We hash what we read and compare to the
+        last content we emitted; if unchanged, wait 200 ms and retry, up to
+        ~1.2 s total before giving up.
+        """
+        if not self.ble.connected:
+            return
+
+        # Claude Code's transcript writes are async w.r.t. the Stop hook — the
+        # hook fires before the final assistant record hits disk. Sleep a beat
+        # so our first read sees the just-finished turn; then poll for up to
+        # another ~1.2s if that wasn't enough (e.g., long response still being
+        # serialized). Dedupe by content hash so we never re-emit the same turn.
+        await asyncio.sleep(1.0)
+
+        import hashlib
+        import json as _json
+        last_key = self._last_emitted_turn_key.get(transcript_path)
+        content: list | None = None
+        content_key: str | None = None
+        for attempt in range(6):
+            if attempt > 0:
+                await asyncio.sleep(0.2)
+            try:
+                self.jsonl._process_file(transcript_path)
+            except Exception:  # noqa: BLE001
+                log.debug("turn event: process_file failed", exc_info=True)
+            candidate = self.jsonl.last_assistant_content(transcript_path)
+            if not candidate:
+                continue
+            key = hashlib.md5(
+                _json.dumps(candidate, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            if key != last_key:
+                content = candidate
+                content_key = key
+                break
+            log.debug("turn event: transcript content unchanged, retrying (attempt %d)", attempt + 1)
+
+        if not content:
+            log.info("turn end: no fresh content after 1s warmup + 1.2s polling")
+            return
+
+        text = _first_text_block(content)
+        if text:
+            log.info("turn end: adding entry '@ %s...' (state.entries len before=%d)",
+                     text[:30], len(self.state.entries))
+            self.state.add_entry(f"@ {truncate_utf8_bytes(text, _ENTRY_PAYLOAD_MAX_BYTES)}")
+            await self._push_heartbeat(force=True)
+            if content_key is not None:
+                self._last_emitted_turn_key[transcript_path] = content_key
+        else:
+            log.info("turn end: content found but no text block, skipping entry add")
+
+
+def _first_text_block(content: list) -> str:
+    """Pull the first text block out of an SDK content array. Returns '' if
+    the turn was purely tool_use / tool_result (no natural-language reply)."""
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return ""
+
+
+def _log_permission_config_summary(matchers: MatcherConfig) -> None:
+    """One-shot log at startup: how does the matcher interact with Claude Code's
+    own permissions config? Flags the two most confusing misalignments:
+
+    1. defaultMode == 'bypassPermissions' AND matcher is non-strict — the stick
+       only gates always_ask patterns; everything else is silently bypassed.
+    2. matcher.strict but defaultMode unsuitable — strict mode wants
+       bypassPermissions, otherwise unmatched commands still go through Claude
+       Code's normal prompt UI.
+    """
+    import json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    default_mode: Optional[str] = None
+    ask_count = 0
+    if settings_path.exists():
+        try:
+            with settings_path.open() as f:
+                data = json.load(f)
+            perms = data.get("permissions") or {}
+            default_mode = perms.get("defaultMode")
+            ask_count = len(perms.get("ask") or [])
+        except (OSError, ValueError) as e:
+            log.debug("could not read settings.json for permission summary: %s", e)
+
+    matcher_summary = (
+        f"matcher: strict={matchers.strict} "
+        f"auto_allow={len(matchers.auto_allow)} "
+        f"always_ask={len(matchers.always_ask)}"
+    )
+    log.info("%s", matcher_summary)
+    log.info(
+        "settings.json: permissions.defaultMode=%r ask=%d",
+        default_mode or "(unset)", ask_count,
+    )
+
+    if default_mode == "bypassPermissions" and not matchers.strict:
+        log.warning(
+            "permissions.defaultMode='bypassPermissions' + matcher.strict=false: "
+            "the stick gates *only* always_ask patterns (%d defined); everything "
+            "else is auto-approved without any human-in-the-loop. To put the "
+            "stick in front of every un-vetted command, set `strict = true` in "
+            "your matchers.toml.",
+            len(matchers.always_ask),
+        )
+    elif matchers.strict and default_mode not in ("bypassPermissions", None):
+        log.warning(
+            "matcher.strict=true but permissions.defaultMode=%r: unmatched "
+            "commands will route to the stick AND Claude Code may still surface "
+            "its own terminal prompt depending on the mode. Strict mode is "
+            "designed to pair with defaultMode='bypassPermissions'.",
+            default_mode,
+        )
