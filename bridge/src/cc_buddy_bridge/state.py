@@ -26,6 +26,11 @@ class Session:
     cwd: Optional[str] = None
     running: bool = False
     pending: Optional[PendingPermission] = None
+    # Set by the Notification hook when Claude is blocked on the user
+    # (permission prompt in the terminal, idle waiting for input). Drives
+    # the firmware's attention animation via the heartbeat's ``waiting``
+    # count. 0.0 = not waiting. Cleared by turn_begin/posttooluse.
+    needs_input_at: float = 0.0
 
 
 @dataclass
@@ -75,6 +80,7 @@ class State:
         s = self.sessions.get(session_id)
         if s is not None:
             s.running = True
+            s.needs_input_at = 0.0  # user responded — attention satisfied
 
     def turn_end(self, session_id: str) -> None:
         s = self.sessions.get(session_id)
@@ -125,6 +131,30 @@ class State:
         if not pendings:
             return None
         return min(pendings, key=lambda p: p.issued_at)
+
+    # ---- needs-input (Notification hook) ----
+
+    # Auto-expire so a notification for an abandoned session doesn't leave
+    # the pet impatient forever.
+    NEEDS_INPUT_TTL_SECS = 15 * 60
+
+    def needs_input(self, session_id: str) -> None:
+        s = self.sessions.get(session_id)
+        if s is None:
+            s = Session(session_id=session_id, started_at=time.time())
+            self.sessions[session_id] = s
+        s.needs_input_at = time.monotonic()
+
+    def input_received(self, session_id: str) -> None:
+        s = self.sessions.get(session_id)
+        if s is not None:
+            s.needs_input_at = 0.0
+
+    def _needs_input_live(self, s: Session) -> bool:
+        return (
+            s.needs_input_at > 0.0
+            and (time.monotonic() - s.needs_input_at) < self.NEEDS_INPUT_TTL_SECS
+        )
 
     # ---- celebrate pulse ----
 
@@ -177,7 +207,10 @@ class State:
 
     @property
     def waiting_count(self) -> int:
-        return sum(1 for s in self.sessions.values() if s.pending is not None)
+        return sum(
+            1 for s in self.sessions.values()
+            if s.pending is not None or self._needs_input_live(s)
+        )
 
 
 def _today_key() -> str:

@@ -36,10 +36,10 @@ def test_install_from_scratch(temp_settings: Path) -> None:
     assert installer.install_hooks() == 0
     data = json.loads(temp_settings.read_text())
     assert "hooks" in data
-    # All 6 hook events covered.
+    # All 7 hook events covered.
     assert set(data["hooks"].keys()) == {
         "PreToolUse", "PostToolUse", "SessionStart", "SessionEnd",
-        "UserPromptSubmit", "Stop",
+        "UserPromptSubmit", "Stop", "Notification",
     }
     # Non-hook settings preserved.
     assert data["statusLine"]["command"] == "true"

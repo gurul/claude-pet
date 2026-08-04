@@ -23,8 +23,9 @@ def test_package_repo_root_finds_dotgit():
     root = update.package_repo_root()
     assert root is not None
     assert (root / ".git").exists()
-    # And the repo is the same one we're running from.
-    assert (root / "pyproject.toml").exists()
+    # And the repo is the one we're running from. In the claude-pet fork the
+    # bridge lives in a bridge/ subdir of the repo root.
+    assert (root / "pyproject.toml").exists() or (root / "bridge" / "pyproject.toml").exists()
 
 
 # ---- _git_status_clean (parses subprocess output) ----

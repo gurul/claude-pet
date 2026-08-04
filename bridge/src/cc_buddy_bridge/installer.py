@@ -25,6 +25,7 @@ HOOK_DEFS: list[tuple[str, str, str | None, bool]] = [
     ("SessionEnd",        "cc_buddy_bridge.hooks.session_end",        None,   False),
     ("UserPromptSubmit",  "cc_buddy_bridge.hooks.user_prompt_submit", None,   False),
     ("Stop",              "cc_buddy_bridge.hooks.stop",               None,   False),
+    ("Notification",      "cc_buddy_bridge.hooks.notification",       None,   False),
 ]
 
 

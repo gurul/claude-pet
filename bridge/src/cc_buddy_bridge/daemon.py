@@ -344,9 +344,25 @@ class Daemon:
         if evt == "posttooluse":
             # Clear any lingering pending (defensive; normally cleared in _handle_pretooluse).
             self.state.permission_resolved(req.get("tool_use_id", ""))
+            # A tool ran → any terminal-side permission prompt was answered.
+            self.state.input_received(req.get("session_id", ""))
             tool_name = req.get("tool_name")
             if isinstance(tool_name, str):
                 self.state.add_entry(f"+ {tool_name}")
+            await self._push_heartbeat()
+            return {"ok": True}
+
+        if evt == "notification":
+            # Claude is blocked on the user (permission prompt / waiting for
+            # input). Mark the session so heartbeats carry waiting>0 — the
+            # firmware's attention animation + LED pulse.
+            self.state.needs_input(req.get("session_id", ""))
+            msg = req.get("message")
+            if isinstance(msg, str) and msg.strip():
+                self.state.add_entry(f"! {msg.strip()}")
+            log.info("notification: session=%s type=%s → attention",
+                     (req.get("session_id") or "?")[:8],
+                     req.get("notification_type") or "?")
             await self._push_heartbeat()
             return {"ok": True}
 

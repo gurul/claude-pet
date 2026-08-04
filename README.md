@@ -61,12 +61,17 @@ If the flasher can't connect: hold **BOOT**, tap **RESET**, release BOOT, retry.
 cd bridge
 python3.12 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/cc-buddy-bridge daemon --serial-port '/dev/cu.usbmodem*'   # keep running
-.venv/bin/cc-buddy-bridge install    # registers 6 hooks in ~/.claude/settings.json
+.venv/bin/cc-buddy-bridge install    # registers 7 hooks in ~/.claude/settings.json
+.venv/bin/cc-buddy-bridge install --service --serial-port '/dev/cu.usbmodem*'
+                                     # auto-start the daemon on login (launchd/systemd)
 ```
 
 Hook flow: trivial Bash commands are auto-allowed, risky ones (`git push`, `rm`, …) prompt
 **on the pet** with a 300s timeout falling back to the terminal, everything else uses
-Claude Code's normal flow. `cc-buddy-bridge audit` shows the decision log.
+Claude Code's normal flow. Whenever Claude is blocked on you — a permission prompt in the
+terminal, or it's idle waiting for input — the `Notification` hook puts the pet into its
+**attention** animation (impatient pet + pulsing orange LED) until you respond.
+`cc-buddy-bridge audit` shows the decision log.
 
 ## Porting notes
 
