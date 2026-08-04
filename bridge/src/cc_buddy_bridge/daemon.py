@@ -7,7 +7,10 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .voice_trigger import VoiceHold
 
 from .audit import AuditLog
 from .ble import BuddyBLE
@@ -72,6 +75,10 @@ class Daemon:
         # Read scopes (git-repo roots / parent dirs) the user has approved via
         # a card swipe. Daemon-lifetime by design — restart forgets all grants.
         self._read_scopes: set[str] = set()
+        # Hold-the-pet push-to-talk: holds Opt+Space (VoiceFlow) between the
+        # stick's voice start/stop events. Lazily constructed on first use so
+        # non-mac / Quartz-less hosts pay nothing.
+        self._voice: Optional["VoiceHold"] = None
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -117,6 +124,7 @@ class Daemon:
             asyncio.create_task(self._on_ble_connected(), name="on-connect"),
             asyncio.create_task(self._status_poller(), name="status-poller"),
             asyncio.create_task(self._update_check_loop(), name="update-check"),
+            asyncio.create_task(self._voice_watchdog(), name="voice-watchdog"),
         ]
         try:
             await self._shutdown.wait()
@@ -128,6 +136,8 @@ class Daemon:
                     pend.cancel()
             await asyncio.gather(*tasks, *self._pending_turn_ends.values(),
                                  return_exceptions=True)
+            if self._voice is not None:
+                self._voice.stop()   # idempotent; never exit with keys down
             await self.ble.stop()
             await self.ipc.stop()
 
@@ -201,6 +211,21 @@ class Daemon:
                 pass
             if self.ble.connected:
                 await self.ble.send({"cmd": "status"})
+
+    async def _voice_watchdog(self) -> None:
+        """Force-release an overdue push-to-talk hold. The stop event can be
+        lost (serial died mid-hold, board reset while recording), and a
+        system-wide stuck Opt+Space is the one failure mode this feature is
+        not allowed to have."""
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=5.0)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self._voice is not None and self._voice.overdue():
+                log.warning("voice: hold overdue — force-releasing Opt+Space")
+                self._voice.stop()
 
     async def _update_check_loop(self) -> None:
         """Poll GitHub releases once at startup, then every 24 hours.
@@ -497,6 +522,21 @@ class Daemon:
 
     async def _handle_ble(self, obj: dict[str, Any]) -> None:
         cmd = obj.get("cmd")
+        if cmd == "voice":
+            # Hold-the-pet push-to-talk. start = finger settled on the pet,
+            # stop = release. The VoiceHold object is idempotent, and the
+            # status poller force-releases an overdue hold (lost stop event).
+            if self._voice is None:
+                from .voice_trigger import VoiceHold
+                self._voice = VoiceHold()
+            state = obj.get("state")
+            if state == "start":
+                self._voice.start()
+            elif state == "stop":
+                self._voice.stop()
+            else:
+                log.warning("voice: unknown state %r", state)
+            return
         if cmd == "permission":
             tool_use_id = obj.get("id")
             decision = obj.get("decision")

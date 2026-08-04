@@ -29,6 +29,12 @@ dependencies = [
     # macOS/Linux installs don't try to pull Windows projection packages).
     "winrt-Windows.Devices.Bluetooth>=2.0; sys_platform == 'win32'",
     "winrt-Windows.Devices.Radios>=2.0; sys_platform == 'win32'",
+    # macOS-only: hold-the-pet push-to-talk synthesizes a global Opt+Space
+    # hold for VoiceFlow via CGEventPost (voice_trigger.py). 12.2.1 current
+    # per `pip index versions`, 2026-08-04. ApplicationServices provides the
+    # AXIsProcessTrusted Accessibility check + prompt.
+    "pyobjc-framework-Quartz>=12.0; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=12.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

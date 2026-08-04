@@ -1122,8 +1122,12 @@ void loop() {
 
   if ((int32_t)(now - oneShotUntil) >= 0) activeState = baseState;
 
-  // WS2812: pulse orange on attention, pink on heart, green on celebrate
-  if (settings().led && activeState == P_ATTENTION) {
+  // WS2812: pulse orange on attention, pink on heart, green on celebrate.
+  // Solid blue overrides everything while a push-to-talk hold is active —
+  // it is the "mic is live" indicator.
+  if (settings().led && M5.petHeldNow()) {
+    ledSet(0, 30, 90);
+  } else if (settings().led && activeState == P_ATTENTION) {
     bool on = (now / 400) % 2;
     ledSet(on ? 255 : 0, on ? 80 : 0, 0);
   } else if (settings().led && activeState == P_HEART) {
@@ -1134,10 +1138,20 @@ void loop() {
     ledSet(0, 0, 0);
   }
 
-  // touch gestures on the pet: tap = pet it (heart), scrub = dizzy.
+  // touch gestures on the pet: tap = pet it (heart), scrub = dizzy,
+  // press-and-hold = push-to-talk (the bridge holds Opt+Space for
+  // VoiceFlow while the finger is down).
   // Drained during a prompt — the swipe card's band overlaps the pet
   // zone, and a card drag must not read as a scrub.
-  if (!menuOpen && !settingsOpen && !resetOpen && !screenOff && !tama.promptId[0]) {
+  static bool voiceHold = false;
+  bool gesturesLive = !menuOpen && !settingsOpen && !resetOpen && !screenOff && !tama.promptId[0];
+  if (gesturesLive) {
+    if (M5.petHoldStarted()) {
+      wake();
+      voiceHold = true;
+      sendCmd("{\"cmd\":\"voice\",\"state\":\"start\"}");
+      beep(1200, 30);
+    }
     if (M5.petScrubbed() && (int32_t)(now - oneShotUntil) >= 0) {
       wake();
       triggerOneShot(P_DIZZY, 2000);
@@ -1148,7 +1162,15 @@ void loop() {
       beep(1600, 40);
     }
   } else {
-    M5.petTapped(); M5.petScrubbed();   // drain events while overlays open
+    M5.petTapped(); M5.petScrubbed(); M5.petHoldStarted();  // drain while overlays open
+  }
+  // Stop is handled OUTSIDE the overlay gate: if a prompt or menu opens
+  // mid-hold, the release must still end the dictation — a swallowed stop
+  // means the bridge holds Opt+Space until its own watchdog fires.
+  if (M5.petHoldEnded() && voiceHold) {
+    voiceHold = false;
+    sendCmd("{\"cmd\":\"voice\",\"state\":\"stop\"}");
+    beep(900, 30);
   }
 
   // BtnA: step through fake scenarios

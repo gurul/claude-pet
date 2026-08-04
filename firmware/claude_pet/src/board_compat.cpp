@@ -117,23 +117,41 @@ void M5Compat::update() {
     _petDownMs = now; _petDownX = _tx; _petDownY = _ty;
     _lastX = _tx; _dir = 0; _reversals = 0;
   } else if (inPet && _petTouch) {        // drag: watch for direction flips
-    int dx = _tx - _lastX;
-    if (abs(dx) > 12) {
-      int8_t d = dx > 0 ? 1 : -1;
-      if (_dir != 0 && d != _dir) _reversals++;
-      _dir = d;
-      _lastX = _tx;
+    // A steady 600ms press becomes a hold (push-to-talk); once a hold is
+    // active, scrub detection is off — finger wobble mid-dictation must
+    // not fire dizzy.
+    if (!_holdActive && now - _petDownMs >= 600
+        && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20) {
+      _holdActive = true;
+      _evHoldStart = true;
     }
-    if (_reversals >= 3) { _evScrub = true; _petTouch = false; }
+    if (!_holdActive) {
+      int dx = _tx - _lastX;
+      if (abs(dx) > 12) {
+        int8_t d = dx > 0 ? 1 : -1;
+        if (_dir != 0 && d != _dir) _reversals++;
+        _dir = d;
+        _lastX = _tx;
+      }
+      if (_reversals >= 3) { _evScrub = true; _petTouch = false; }
+    }
   } else if (!down && _petTouch) {        // release
     _petTouch = false;
-    uint32_t held = now - _petDownMs;
-    if (held < 450 && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20)
-      _evTap = true;
+    if (_holdActive) {
+      _holdActive = false;
+      _evHoldEnd = true;                  // hold consumed the press: no tap
+    } else {
+      uint32_t held = now - _petDownMs;
+      if (held < 450 && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20)
+        _evTap = true;
+    }
   } else if (!inPet) {
+    if (_holdActive) { _holdActive = false; _evHoldEnd = true; }  // slid out
     _petTouch = false;
   }
 }
 
 bool M5Compat::petTapped()   { bool e = _evTap;   _evTap = false;   return e; }
 bool M5Compat::petScrubbed() { bool e = _evScrub; _evScrub = false; return e; }
+bool M5Compat::petHoldStarted() { bool e = _evHoldStart; _evHoldStart = false; return e; }
+bool M5Compat::petHoldEnded()   { bool e = _evHoldEnd;   _evHoldEnd = false;   return e; }

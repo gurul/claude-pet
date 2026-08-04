@@ -105,12 +105,17 @@ extern const Species BONGO_SPECIES;
 
 // Append new species at the END — the saved NVS species index is
 // positional, so inserting mid-table would remap everyone's buddy.
+// Bongo leads: slot 0 is the boot default (fresh NVS returns the 0xFF GIF
+// sentinel, which buddyInit leaves at index 0), and the bongo cat is this
+// build's headline pet. Saved indices are positional, so reordering shifts
+// anyone's previously-cycled ASCII pick by one — acceptable here.
 static const Species* SPECIES_TABLE[] = {
+  &BONGO_SPECIES,
   &CAPYBARA_SPECIES, &DUCK_SPECIES, &GOOSE_SPECIES, &BLOB_SPECIES,
   &CAT_SPECIES, &DRAGON_SPECIES, &OCTOPUS_SPECIES, &OWL_SPECIES,
   &PENGUIN_SPECIES, &TURTLE_SPECIES, &SNAIL_SPECIES, &GHOST_SPECIES,
   &AXOLOTL_SPECIES, &CACTUS_SPECIES, &ROBOT_SPECIES, &RABBIT_SPECIES,
-  &MUSHROOM_SPECIES, &CHONK_SPECIES, &BONGO_SPECIES,
+  &MUSHROOM_SPECIES, &CHONK_SPECIES,
 };
 static const uint8_t N_SPECIES = sizeof(SPECIES_TABLE) / sizeof(SPECIES_TABLE[0]);
 static uint8_t currentSpeciesIdx = 0;

@@ -108,6 +108,13 @@ class M5Compat {
   // One-shot gesture events in the pet area (consumed on read)
   bool petTapped();     // quick tap on the pet → heart
   bool petScrubbed();   // rapid left-right scrubbing → dizzy
+  // Press-and-hold on the pet: push-to-talk. Fires start after 600ms of a
+  // steady press (<20px drift), end on release or on leaving the pet zone.
+  // A hold never also fires tap (tap needs release <450ms) and suppresses
+  // scrub detection while active. Level query for LED feedback.
+  bool petHoldStarted();
+  bool petHoldEnded();
+  bool petHeldNow() const { return _holdActive; }
 
  private:
   bool _touchDown = false;
@@ -120,6 +127,8 @@ class M5Compat {
   int8_t   _dir = 0;
   uint8_t  _reversals = 0;
   bool     _evTap = false, _evScrub = false;
+  bool     _holdActive = false;
+  bool     _evHoldStart = false, _evHoldEnd = false;
   bool readTouch(int* x, int* y);
 };
 

@@ -46,6 +46,7 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | **Hold** bottom-left | menu |
 | **Tap the pet** | pet it → heart |
 | **Scrub the pet** | dizzy! |
+| **Hold the pet** | push-to-talk: dictate via VoiceFlow while held (LED solid blue) |
 
 The WS2812 pulses orange while an approval is pending, pink on heart, green on celebrate.
 
@@ -65,6 +66,26 @@ Deciding is a swipe, not a tap:
 Approve maps to Claude Code's *allow once*; deny is *deny*. Fast approvals (<5s) earn a
 heart. While a prompt is up, the tap zones and pet gestures are suspended so a swipe
 crossing them can't change screens or dizzy the pet.
+
+### Hold the pet to dictate (VoiceFlow)
+
+Press and hold the pet for 600ms (steady finger, <20px drift) and the bridge
+holds **Option+Space** — [VoiceFlow](https://github.com/Alexander-Ollman/voiceflow)'s
+global push-to-talk — until you let go. Finger down = recording (WS2812 goes
+solid blue), finger up = VoiceFlow transcribes and pastes at the cursor. A hold
+never fires the heart tap, and scrub detection is off while holding so finger
+wobble mid-dictation can't dizzy the pet. Release works even if a prompt or
+menu opens mid-hold.
+
+Requirements on the Mac: VoiceFlow running, and **Accessibility permission**
+for the daemon's python (System Settings → Privacy & Security → Accessibility —
+the first hold triggers the system prompt; nothing is posted until granted,
+since macOS silently filters synthetic events from untrusted processes).
+
+Stuck-key safety: the daemon force-releases after 60s if the release event is
+lost (board reset mid-hold, serial drop), and always releases on shutdown. A
+system-wide held Opt+Space is the one failure this feature is not allowed to
+have.
 
 ### The clock face
 
