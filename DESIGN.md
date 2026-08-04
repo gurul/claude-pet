@@ -55,6 +55,27 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
 Everything else (data.h, stats.h, xfer.h, character.cpp GIF renderer, 18 species) ports unchanged
 apart from geometry constants (`BUDDY_X_CENTER` 67→120, canvas 135→240, layout scale).
 
+## Swipe-card approvals
+
+Permission prompts render as a draggable card (`main.cpp`, `CARD_*` constants + `drawApproval`)
+instead of the upstream tap-left/tap-right panel:
+
+- **Input** comes from the raw FT6336 state (`M5.touching()/touchX()/touchY()`), not the
+  synthetic `BtnA/BtnB` zones. A drag can start anywhere in the card band (y ≥ 204). While a
+  prompt is visible the button handlers and pet gestures are swallowed — the tail of a swipe
+  crossing the strip must not cycle screens, and a drag through the pet zone must not scrub.
+- **Tilt** is real rotation: the card face is drawn into a second 210×80 sprite and composited
+  into the full-screen sprite with `pushRotated` (±9° clamp, `TFT_TRANSPARENT` corners). At ±9°
+  the rotated half-height is ~56px, so a center at y=262 keeps every pixel inside the 204..320
+  band, which is cleared each frame — same self-clearing model as the old panel, no trails over
+  the dirty-region pet renderer.
+- **State machine** `REST → DRAG → FLY | SNAP`: release past 60px (or a >10px/frame flick)
+  sends the decision (`once`/`deny`) immediately and accelerates the card off-screen (×1.12/frame);
+  otherwise it springs back (×0.65/frame). The stamp + border color flip at 30% of the commit
+  distance, with a beep latch at 100%.
+- **Memory:** the card sprite (33KB) allocates on prompt arrival and frees on resolve; if
+  allocation fails the card draws directly on the main sprite, untilted, and swiping still works.
+
 ## Phases
 
 - **A — display bring-up:** sketch compiles under arduino-cli, buddy idle animation renders correctly

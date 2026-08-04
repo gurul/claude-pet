@@ -45,6 +45,23 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 
 The WS2812 pulses orange while an approval is pending, pink on heart, green on celebrate.
 
+### The approval card
+
+When a permission prompt arrives, it renders as a **card** in the bottom band of the
+screen — tool name, a two-line hint, and a wait timer (turns red-orange after 10s).
+Deciding is a swipe, not a tap:
+
+- **Drag** the card left or right — it follows your finger and tilts up to ±9°.
+- Past **60px** of drag the border turns green (right) or red (left) and an
+  **APPROVE** / **DENY** stamp appears with a chirp.
+- **Release past the threshold** (or flick fast) → the decision sends immediately and the
+  card accelerates off-screen; `sent...` shows until Claude Code acks.
+- **Release early** → the card springs back to center. Nothing sent.
+
+Approve maps to Claude Code's *allow once*; deny is *deny*. Fast approvals (<5s) earn a
+heart. While a prompt is up, the tap zones and pet gestures are suspended so a swipe
+crossing them can't change screens or dizzy the pet.
+
 ## Build & flash (firmware)
 
 ```bash
