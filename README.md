@@ -36,6 +36,7 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | Gesture | Action |
 |---|---|
 | **Swipe card right** | approve prompt (card flies off) |
+| **Swipe card up** | approve prompt (same as right — a quick flick for read cards) |
 | **Swipe card left** | deny prompt |
 | Tap bottom-**left** | next screen |
 | Tap bottom-**right** | next page |
@@ -162,6 +163,23 @@ The transport now watches for this: the firmware prints `[alive]` every 5s, so
 20s of total silence is treated as a stale handle and forces a reconnect
 (`serial: no data from board for 20s …` in the log). Restarting the daemon also
 clears it.
+
+### Read cards
+
+File reads outside the session's working directory used to prompt only in the
+terminal — during a subagent swarm that meant a stream of terminal prompts, each
+flapping the pet into its attention animation with no way to act from the board.
+
+Those reads now surface as cards too (`Read` + the home-relative path), and an
+**approval grants the whole enclosing scope** — the containing git repo when
+there is one, else the file's parent directory — for the rest of the daemon's
+life. The next hundred reads under that repo sail through without a card; that
+scope-not-file grant is the point. Deny stays per-file and grants nothing.
+Grants are deliberately not persisted: restarting the daemon forgets them all.
+Approving a file directly in `~` or `/` grants nothing (it would be everything).
+Reads inside the session cwd never card — Claude Code already allows those
+silently. Swipe **up** or right to approve; new sessions pick up the `Read`
+hook, already-running ones keep the old terminal behaviour until restarted.
 
 The matcher patterns are **anchored at the start of the command** (`^chmod( |$)`,
 `^git push( |$)`, …). A leading variable assignment or `cd` defeats them —

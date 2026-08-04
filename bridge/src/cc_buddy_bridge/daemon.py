@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from .audit import AuditLog
@@ -21,6 +22,7 @@ from .protocol import (
     build_time_sync,
     truncate_utf8_bytes,
 )
+from .read_policy import is_within, read_scope
 from .state import State
 from .version_check import check as version_check
 
@@ -67,6 +69,9 @@ class Daemon:
         self.audit = AuditLog()
         # tool_use_id → Future resolving to "allow" | "deny"
         self._permission_futures: dict[str, asyncio.Future[str]] = {}
+        # Read scopes (git-repo roots / parent dirs) the user has approved via
+        # a card swipe. Daemon-lifetime by design — restart forgets all grants.
+        self._read_scopes: set[str] = set()
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -375,6 +380,11 @@ class Daemon:
         tool_name = req.get("tool_name") or "tool"
         hint = req.get("hint") or ""
 
+        # Read tool takes its own path: out-of-cwd reads card on the stick and
+        # an approval grants the enclosing repo/dir. See read_policy.py.
+        if tool_name == "Read":
+            return await self._handle_read_pretooluse(req, tool_use_id, session_id, hint)
+
         # Smart matcher: classify trivial / risky commands before the BLE round-trip.
         # auto_allow → approve immediately, no stick prompt (keeps ls/cat fast).
         # always_ask → force stick prompt even if Claude Code would auto-approve.
@@ -403,6 +413,19 @@ class Daemon:
             self.audit.record(**audit_kwargs, decision=None, source="defer")
             return {"ok": True}
 
+        decision, source, elapsed = await self._await_stick_decision(
+            session_id, tool_use_id, tool_name, hint)
+        self.audit.record(
+            **audit_kwargs, decision=decision, source=source, elapsed_s=elapsed,
+        )
+        return {"ok": True, "decision": decision}
+
+    async def _await_stick_decision(
+        self, session_id: str, tool_use_id: str, tool_name: str, hint: str,
+    ) -> tuple[str, str, float]:
+        """Surface a prompt card on the stick and block until it is swiped
+        (or times out). Returns (decision, source, elapsed_s); timeout maps
+        to 'ask' so Claude Code's terminal prompt takes over."""
         log.info(
             "permission request: tool=%s id=%s hint=%r waiting up to %.0fs",
             tool_name, tool_use_id, hint[:80], PERMISSION_WAIT_SECS,
@@ -432,6 +455,39 @@ class Daemon:
             self._permission_futures.pop(tool_use_id, None)
             self.state.permission_resolved(tool_use_id)
             await self._push_heartbeat()
+        return decision, source, elapsed
+
+    async def _handle_read_pretooluse(
+        self, req: dict[str, Any], tool_use_id: str, session_id: str, hint: str,
+    ) -> dict[str, Any]:
+        """Read-tool prompts: card out-of-cwd reads; approval grants the whole
+        enclosing scope (git repo or parent dir) for the daemon's lifetime.
+        See read_policy.py for why scope-not-file is the point."""
+        path = hint
+        cwd = req.get("cwd") or ""
+        audit_kwargs = dict(
+            session_id=session_id, tool_name="Read", hint=path, matcher="read",
+        )
+        # In-cwd reads never prompt anywhere; defer without noise.
+        if not path or is_within(path, cwd):
+            return {"ok": True}
+        scope = read_scope(path)
+        if scope is not None and scope in self._read_scopes:
+            log.info("read under approved scope %s → allow (%s)", scope, path)
+            self.audit.record(**audit_kwargs, decision="allow", source="read_scope")
+            return {"ok": True, "decision": "allow"}
+        if not self.ble.connected:
+            self.audit.record(**audit_kwargs, decision=None, source="ble_disconnected")
+            return {"ok": True}
+        # Card it. Show the path home-relative so the two hint lines carry
+        # the tail of the path, which is the part a human recognises.
+        home = str(Path.home())
+        shown = "~" + path[len(home):] if path.startswith(home) else path
+        decision, source, elapsed = await self._await_stick_decision(
+            session_id, tool_use_id, "Read", shown)
+        if decision == "allow" and scope is not None:
+            self._read_scopes.add(scope)
+            log.info("read scope granted for this daemon's lifetime: %s", scope)
         self.audit.record(
             **audit_kwargs, decision=decision, source=source, elapsed_s=elapsed,
         )

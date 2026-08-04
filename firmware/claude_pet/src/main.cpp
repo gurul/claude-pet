@@ -752,12 +752,30 @@ static CardPhase   cardPhase = CARD_REST;
 static TFT_eSprite cardSpr(&M5.Lcd);
 static float cardX = 0, cardVel = 0;
 static int   cardGrabX = 0;
+// Vertical drag is a gesture channel only: swiping UP approves (same as
+// right), but the card never moves up visually — the rotated card at rest
+// already grazes the band's top edge (262 - ~56 = 206 vs band 204), so any
+// upward offset would smear into the HUD band above, which repaints on its
+// own cadence. The stamp/border/beep give the feedback instead.
+static float cardY = 0, cardVelY = 0;
+static int   cardGrabY = 0;
 static bool  cardTouchPrev = false;
 static bool  cardArmed = false;        // past-threshold beep latch
 const int    CARD_W = 210, CARD_H = 80;
 const int    CARD_BAND_Y = 204;
 const int    CARD_CX = 120, CARD_CY = 262;
 const float  CARD_COMMIT = 60.0f;      // px of drag that commits a decision
+const float  CARD_COMMIT_UP = 45.0f;   // shorter: only ~58px of travel to the band top
+
+// Signed commit ratio for border/stamp: horizontal ratio unless the upward
+// pull is stronger, in which case it counts as approve (+).
+static float cardRatio() {
+  float rx = cardX / CARD_COMMIT;
+  float ru = -cardY / CARD_COMMIT_UP;
+  float r = (ru > fabsf(rx)) ? ru : rx;
+  if (r > 1) r = 1; if (r < -1) r = -1;
+  return r;
+}
 
 static void sendDecision(bool approve) {
   char cmd[96];
@@ -779,8 +797,7 @@ static void sendDecision(bool approve) {
 // Card face, drawn at (ox,oy) on any surface — cardSpr normally, spr
 // directly when the card sprite failed to allocate (no tilt then).
 static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
-  float r = cardX / CARD_COMMIT;
-  if (r > 1) r = 1; if (r < -1) r = -1;
+  float r = cardRatio();
   uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT : p.textDim;
   g->fillRoundRect(ox, oy, CARD_W, CARD_H, 8, PANEL);
   g->drawRoundRect(ox, oy, CARD_W, CARD_H, 8, edge);
@@ -809,8 +826,8 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
   g->setCursor(ox + 10, oy + CARD_H - 14);
   g->print("< deny");
   g->setTextColor(GREEN, PANEL);
-  g->setCursor(ox + CARD_W - 10 - 9 * 6, oy + CARD_H - 14);
-  g->print("approve >");
+  g->setCursor(ox + CARD_W - 10 - 11 * 6, oy + CARD_H - 14);
+  g->print("approve ^ >");
   uint32_t waited = (millis() - promptArrivedMs) / 1000;
   char wb[8]; snprintf(wb, sizeof(wb), "%lus", (unsigned long)waited);
   g->setTextColor(waited >= 10 ? HOT : p.textDim, PANEL);
@@ -1152,14 +1169,14 @@ void loop() {
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
       cardPhase = CARD_REST;
-      cardX = 0; cardVel = 0; cardArmed = false;
+      cardX = 0; cardVel = 0; cardY = 0; cardVelY = 0; cardArmed = false;
       if (!cardSpr.created()) cardSpr.createSprite(CARD_W, CARD_H);
     } else {
       // Prompt resolved — free the card sprite and repaint everything so
       // the card band doesn't leave stale rows under the transcript HUD.
       if (cardSpr.created()) cardSpr.deleteSprite();
       cardPhase = CARD_REST;
-      cardX = 0; cardVel = 0;
+      cardX = 0; cardVel = 0; cardY = 0; cardVelY = 0;
       applyDisplayMode();
       if (buddyMode) buddyInvalidate();
     }
@@ -1177,7 +1194,8 @@ void loop() {
           && tdown && !cardTouchPrev && M5.touchY() >= CARD_BAND_Y) {
         cardPhase = CARD_DRAG;
         cardGrabX = M5.touchX() - (int)cardX;   // grab mid-snap without a jump
-        cardVel = 0;
+        cardGrabY = M5.touchY();
+        cardVel = 0; cardY = 0; cardVelY = 0;
         wake();
       }
       if (cardPhase == CARD_DRAG) {
@@ -1185,15 +1203,26 @@ void loop() {
           float nx = (float)(M5.touchX() - cardGrabX);
           cardVel = nx - cardX;
           cardX = nx;
-          bool past = fabsf(cardX) > CARD_COMMIT;
+          // Upward pull only (downward drag is meaningless below the card).
+          float nyRaw = (float)(M5.touchY() - cardGrabY);
+          float ny = nyRaw < 0 ? nyRaw : 0;
+          cardVelY = ny - cardY;
+          cardY = ny;
+          bool past = fabsf(cardRatio()) >= 1.0f;
           if (past && !cardArmed) beep(1800, 20);
           cardArmed = past;
           lastInteractMs = millis();
         } else {                               // release
-          bool commit = fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
+          bool upCommit = -cardY > CARD_COMMIT_UP || cardVelY < -12.0f;
+          bool commit = upCommit || fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
           if (commit) {
-            float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
-            bool approve = m > 0;
+            bool approve;
+            if (upCommit) {
+              approve = true;                  // swipe up = approve
+            } else {
+              float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
+              approve = m > 0;
+            }
             sendDecision(approve);
             cardPhase = CARD_FLY;
             float dir = approve ? 1.0f : -1.0f;
@@ -1202,6 +1231,7 @@ void loop() {
             cardPhase = CARD_SNAP;
           }
           cardArmed = false;
+          cardY = 0; cardVelY = 0;
         }
       }
     }

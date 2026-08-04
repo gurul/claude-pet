@@ -29,6 +29,7 @@ HOOK_TIMEOUT_SECS = 330  # must be > daemon's PERMISSION_WAIT_SECS + a small buf
 # (Claude Code hook event name, python module, matcher, needs_decision)
 HOOK_DEFS: list[tuple[str, str, str | None, bool]] = [
     ("PreToolUse",        "cc_buddy_bridge.hooks.pretooluse",         "Bash", True),
+    ("PreToolUse",        "cc_buddy_bridge.hooks.pretooluse",         "Read", True),
     ("PostToolUse",       "cc_buddy_bridge.hooks.posttooluse",        "*",    False),
     ("SessionStart",      "cc_buddy_bridge.hooks.session_start",      None,   False),
     ("SessionEnd",        "cc_buddy_bridge.hooks.session_end",        None,   False),
