@@ -1,5 +1,7 @@
 # Claude Pet 🐾
 
+![claude pet — esp32 desk pet for claude code](docs/assets/thumbnail.png)
+
 A desk pet on an ESP32-S3 touchscreen that reacts to **Claude Code** in real time —
 it sleeps when you're idle, gets busy when Claude is working, demands attention when a
 permission prompt is pending, and lets you **approve or deny tool calls by tapping the screen**.
