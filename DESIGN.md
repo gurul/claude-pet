@@ -34,8 +34,9 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
                                                                             ↓ /dev/cu.usbmodem101
                                              firmware (fork of claude-desktop-buddy)
                                              data.h NDJSON parser → TamaState → derive() → pet states
-                                             touch: tap-left=approve/next · tap-right=deny/page ·
-                                             long-press=menu · petting the sprite=heart · scrub=dizzy
+                                             touch: swipe card right=approve · left=deny ·
+                                             tap-left=next · tap-right=page · long-press=menu ·
+                                             petting the sprite=heart · scrub=dizzy
 ```
 
 ## Firmware port map (M5StickC Plus → FNK0104B)

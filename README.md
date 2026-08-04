@@ -4,7 +4,8 @@
 
 A desk pet on an ESP32-S3 touchscreen that reacts to **Claude Code** in real time —
 it sleeps when you're idle, gets busy when Claude is working, demands attention when a
-permission prompt is pending, and lets you **approve or deny tool calls by tapping the screen**.
+permission prompt is pending, and lets you **approve or deny tool calls by swiping the prompt
+card — right to approve, left to deny** (Tinder-style, tilt and all).
 
 Built by porting two MIT-licensed open-source projects to the
 **Freenove FNK0104B** (ESP32-S3 Display 2.8" Touch, "CYD"-style):
@@ -34,8 +35,10 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 
 | Gesture | Action |
 |---|---|
-| Tap bottom-**left** | approve prompt / next screen |
-| Tap bottom-**right** | deny prompt / next page |
+| **Swipe card right** | approve prompt (card flies off) |
+| **Swipe card left** | deny prompt |
+| Tap bottom-**left** | next screen |
+| Tap bottom-**right** | next page |
 | **Hold** bottom-left | menu |
 | **Tap the pet** | pet it → heart |
 | **Scrub the pet** | dizzy! |

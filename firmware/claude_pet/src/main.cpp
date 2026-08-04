@@ -475,9 +475,6 @@ static void drawClock() {
   M5.Lcd.setRotation(0);
 }
 
-// Prompt-pending check usable before loop() computes inPrompt
-static bool inPromptEarly();
-
 PersonaState derive(const TamaState& s) {
   if (!s.connected)            return P_IDLE;
   if (s.sessionsWaiting > 0)   return P_ATTENTION;
@@ -555,8 +552,8 @@ void drawInfo() {
     ln("approvals pile up.");
     y += 6;
     spr.setTextColor(p.text, p.bg);
-    ln("Press A on a prompt");
-    ln("to approve from here.");
+    ln("Swipe the prompt card");
+    ln("right to approve.");
     y += 6;
     spr.setTextColor(p.textDim, p.bg);
     ln("18 species. Settings");
@@ -564,12 +561,14 @@ void drawInfo() {
 
   } else if (infoPage == 1) {
     _infoHeader(p, y, "TOUCH", infoPage);
+    spr.setTextColor(p.text, p.bg);    ln("swipe card right");
+    spr.setTextColor(GREEN, p.bg);     ln("    approve prompt"); y += 4;
+    spr.setTextColor(p.text, p.bg);    ln("swipe card left");
+    spr.setTextColor(HOT, p.bg);       ln("    deny prompt"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("tap bottom-left");
-    spr.setTextColor(p.textDim, p.bg); ln("    next screen");
-    ln("    approve prompt"); y += 4;
+    spr.setTextColor(p.textDim, p.bg); ln("    next screen"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("tap bottom-right");
-    spr.setTextColor(p.textDim, p.bg); ln("    next page");
-    ln("    deny prompt"); y += 4;
+    spr.setTextColor(p.textDim, p.bg); ln("    next page"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("hold bottom-left");
     spr.setTextColor(p.textDim, p.bg); ln("    menu"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("tap the pet");
@@ -725,48 +724,128 @@ static uint8_t wrapInto(const char* in, char out[][40], uint8_t maxRows, uint8_t
   return row;
 }
 
-static void drawApproval() {
-  const Palette& p = characterPalette();
-  const int AREA = 78;
-  spr.fillRect(0, H - AREA, W, AREA, p.bg);
-  spr.drawFastHLine(0, H - AREA, W, p.textDim);
+// ---- swipe-to-decide card ----
+// The pending permission renders on a card you swipe like a dating app:
+// drag right = approve, drag left = deny. The card follows the finger
+// with a tilt (pushRotated via a second sprite), an APPROVE/DENY stamp
+// appears past the commit threshold, and release either flies the card
+// off-screen or springs it back to center.
+//
+// Geometry: the band (y >= CARD_BAND_Y) is cleared every frame while a
+// prompt is up — same self-clearing model the old panel used, just taller.
+// A 210x80 card at ±9° has a rotated half-height of ~56px, so centering
+// it at y=262 keeps every rotated pixel inside the 204..320 band.
+enum CardPhase : uint8_t { CARD_REST, CARD_DRAG, CARD_SNAP, CARD_FLY };
+static CardPhase   cardPhase = CARD_REST;
+static TFT_eSprite cardSpr(&M5.Lcd);
+static float cardX = 0, cardVel = 0;
+static int   cardGrabX = 0;
+static bool  cardTouchPrev = false;
+static bool  cardArmed = false;        // past-threshold beep latch
+const int    CARD_W = 210, CARD_H = 80;
+const int    CARD_BAND_Y = 204;
+const int    CARD_CX = 120, CARD_CY = 262;
+const float  CARD_COMMIT = 60.0f;      // px of drag that commits a decision
 
-  spr.setTextSize(1);
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(4, H - AREA + 4);
-  uint32_t waited = (millis() - promptArrivedMs) / 1000;
-  if (waited >= 10) spr.setTextColor(HOT, p.bg);
-  spr.printf("approve? %lus", (unsigned long)waited);
+static void sendDecision(bool approve) {
+  char cmd[96];
+  snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}",
+           tama.promptId, approve ? "once" : "deny");
+  sendCmd(cmd);
+  responseSent = true;
+  if (approve) {
+    uint32_t tookS = (millis() - promptArrivedMs) / 1000;
+    statsOnApproval(tookS);
+    beep(2400, 60);
+    if (tookS < 5) triggerOneShot(P_HEART, 2000);
+  } else {
+    statsOnDenial();
+    beep(600, 60);
+  }
+}
 
-  // Size 2 only if it fits one line (~19 chars at 12px on 240px screen)
+// Card face, drawn at (ox,oy) on any surface — cardSpr normally, spr
+// directly when the card sprite failed to allocate (no tilt then).
+static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
+  float r = cardX / CARD_COMMIT;
+  if (r > 1) r = 1; if (r < -1) r = -1;
+  uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT : p.textDim;
+  g->fillRoundRect(ox, oy, CARD_W, CARD_H, 8, PANEL);
+  g->drawRoundRect(ox, oy, CARD_W, CARD_H, 8, edge);
+  if (fabsf(r) >= 1.0f) g->drawRoundRect(ox + 1, oy + 1, CARD_W - 2, CARD_H - 2, 7, edge);
+
+  // Size 2 only if the tool name fits one line (~16 chars at 12px)
   int toolLen = strlen(tama.promptTool);
-  spr.setTextColor(p.text, p.bg);
-  spr.setTextSize(toolLen <= 19 ? 2 : 1);
-  spr.setCursor(4, H - AREA + (toolLen <= 19 ? 14 : 18));
-  spr.print(tama.promptTool);
-  spr.setTextSize(1);
+  g->setTextColor(p.text, PANEL);
+  g->setTextSize(toolLen <= 16 ? 2 : 1);
+  g->setCursor(ox + 10, oy + 8);
+  g->print(tama.promptTool);
+  g->setTextSize(1);
 
-  // Hint wraps at ~38 chars to two lines under the tool name
-  spr.setTextColor(p.textDim, p.bg);
+  // Hint wraps at 31 chars to two lines under the tool name
+  g->setTextColor(p.textDim, PANEL);
   int hlen = strlen(tama.promptHint);
-  spr.setCursor(4, H - AREA + 34);
-  spr.printf("%.38s", tama.promptHint);
-  if (hlen > 38) {
-    spr.setCursor(4, H - AREA + 42);
-    spr.printf("%.38s", tama.promptHint + 38);
+  g->setCursor(ox + 10, oy + 30);
+  g->printf("%.31s", tama.promptHint);
+  if (hlen > 31) {
+    g->setCursor(ox + 10, oy + 40);
+    g->printf("%.31s", tama.promptHint + 31);
   }
 
-  if (responseSent) {
+  // Bottom row: swipe affordances + wait timer in the middle
+  g->setTextColor(HOT, PANEL);
+  g->setCursor(ox + 10, oy + CARD_H - 14);
+  g->print("< deny");
+  g->setTextColor(GREEN, PANEL);
+  g->setCursor(ox + CARD_W - 10 - 9 * 6, oy + CARD_H - 14);
+  g->print("approve >");
+  uint32_t waited = (millis() - promptArrivedMs) / 1000;
+  char wb[8]; snprintf(wb, sizeof(wb), "%lus", (unsigned long)waited);
+  g->setTextColor(waited >= 10 ? HOT : p.textDim, PANEL);
+  g->setCursor(ox + (CARD_W - (int)strlen(wb) * 6) / 2, oy + CARD_H - 14);
+  g->print(wb);
+
+  // Stamp fades in past ~30% of the commit distance
+  if (fabsf(r) > 0.3f) {
+    bool ok = r > 0;
+    const char* s = ok ? "APPROVE" : "DENY";
+    uint16_t c = ok ? GREEN : HOT;
+    int tw = (int)strlen(s) * 12;
+    int sx = ox + (CARD_W - tw) / 2, sy = oy + CARD_H / 2 - 8;
+    g->setTextSize(2);
+    g->setTextColor(c, PANEL);
+    g->setCursor(sx, sy);
+    g->print(s);
+    g->drawRoundRect(sx - 6, sy - 5, tw + 12, 26, 4, c);
+    g->setTextSize(1);
+  }
+}
+
+static void drawApproval() {
+  const Palette& p = characterPalette();
+  spr.fillRect(0, CARD_BAND_Y, W, H - CARD_BAND_Y, p.bg);
+  spr.drawFastHLine(0, CARD_BAND_Y, W, p.textDim);
+
+  if (responseSent && cardPhase != CARD_FLY) {
+    spr.setTextSize(1);
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, H - 12);
     spr.print("sent...");
+    return;
+  }
+
+  int16_t ang = (int16_t)(cardX * 0.075f);
+  if (ang > 9) ang = 9; if (ang < -9) ang = -9;
+
+  spr.setTextSize(1);
+  if (cardSpr.created()) {
+    cardSpr.fillSprite(TFT_TRANSPARENT);
+    drawCardFace(&cardSpr, 0, 0, p);
+    cardSpr.setPivot(CARD_W / 2, CARD_H / 2);
+    spr.setPivot(CARD_CX + (int)cardX, CARD_CY);
+    cardSpr.pushRotated(&spr, ang, TFT_TRANSPARENT);
   } else {
-    spr.setTextColor(GREEN, p.bg);
-    spr.setCursor(4, H - 12);
-    spr.print("tap LEFT: approve");
-    spr.setTextColor(HOT, p.bg);
-    spr.setCursor(W - 96, H - 12);
-    spr.print("tap RIGHT: deny");
+    drawCardFace(&spr, CARD_CX + (int)cardX - CARD_W / 2, CARD_CY - CARD_H / 2, p);
   }
 }
 
@@ -938,8 +1017,6 @@ void drawHUD() {
   }
 }
 
-static bool inPromptEarly() { return tama.promptId[0] && !responseSent; }
-
 void setup() {
   M5.begin();
   delay(2000);                       // let the host attach before first prints
@@ -1028,13 +1105,15 @@ void loop() {
     ledSet(0, 0, 0);
   }
 
-  // touch gestures on the pet: tap = pet it (heart), scrub = dizzy
-  if (!menuOpen && !settingsOpen && !resetOpen && !screenOff) {
+  // touch gestures on the pet: tap = pet it (heart), scrub = dizzy.
+  // Drained during a prompt — the swipe card's band overlaps the pet
+  // zone, and a card drag must not read as a scrub.
+  if (!menuOpen && !settingsOpen && !resetOpen && !screenOff && !tama.promptId[0]) {
     if (M5.petScrubbed() && (int32_t)(now - oneShotUntil) >= 0) {
       wake();
       triggerOneShot(P_DIZZY, 2000);
       Serial.println("scrub: dizzy");
-    } else if (M5.petTapped() && !inPromptEarly()) {
+    } else if (M5.petTapped()) {
       wake();
       triggerOneShot(P_HEART, 2000);
       beep(1600, 40);
@@ -1060,10 +1139,74 @@ void loop() {
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
+      cardPhase = CARD_REST;
+      cardX = 0; cardVel = 0; cardArmed = false;
+      if (!cardSpr.created()) cardSpr.createSprite(CARD_W, CARD_H);
+    } else {
+      // Prompt resolved — free the card sprite and repaint everything so
+      // the card band doesn't leave stale rows under the transcript HUD.
+      if (cardSpr.created()) cardSpr.deleteSprite();
+      cardPhase = CARD_REST;
+      cardX = 0; cardVel = 0;
+      applyDisplayMode();
+      if (buddyMode) buddyInvalidate();
     }
   }
 
   bool inPrompt = tama.promptId[0] && !responseSent;
+
+  // Swipe card: raw-touch drag + release physics. Runs the whole time a
+  // prompt is on screen; decisions commit on release past CARD_COMMIT px
+  // (or a fast flick), then the card flies off while "sent" follows.
+  if (tama.promptId[0]) {
+    bool tdown = M5.touching();
+    if (!responseSent) {
+      if ((cardPhase == CARD_REST || cardPhase == CARD_SNAP)
+          && tdown && !cardTouchPrev && M5.touchY() >= CARD_BAND_Y) {
+        cardPhase = CARD_DRAG;
+        cardGrabX = M5.touchX() - (int)cardX;   // grab mid-snap without a jump
+        cardVel = 0;
+        wake();
+      }
+      if (cardPhase == CARD_DRAG) {
+        if (tdown) {
+          float nx = (float)(M5.touchX() - cardGrabX);
+          cardVel = nx - cardX;
+          cardX = nx;
+          bool past = fabsf(cardX) > CARD_COMMIT;
+          if (past && !cardArmed) beep(1800, 20);
+          cardArmed = past;
+          lastInteractMs = millis();
+        } else {                               // release
+          bool commit = fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
+          if (commit) {
+            float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
+            bool approve = m > 0;
+            sendDecision(approve);
+            cardPhase = CARD_FLY;
+            float dir = approve ? 1.0f : -1.0f;
+            cardVel = fmaxf(fabsf(cardVel), 16.0f) * dir;
+          } else {
+            cardPhase = CARD_SNAP;
+          }
+          cardArmed = false;
+        }
+      }
+    }
+    if (cardPhase == CARD_SNAP) {              // spring back to center
+      cardX *= 0.65f;
+      if (fabsf(cardX) < 1.5f) { cardX = 0; cardVel = 0; cardPhase = CARD_REST; }
+    } else if (cardPhase == CARD_FLY) {        // accelerate off-screen
+      cardVel *= 1.12f;
+      cardX += cardVel;
+      if (fabsf(cardX) > (float)(W / 2 + CARD_W)) {
+        cardX = 0; cardVel = 0; cardPhase = CARD_REST;
+      }
+    }
+    cardTouchPrev = tdown;
+  } else {
+    cardTouchPrev = false;
+  }
 
   // Button-press wake. Track which button woke the screen so its full
   // press cycle (including long-press) is swallowed — you don't want
@@ -1101,15 +1244,9 @@ void loop() {
   }
   if (M5.BtnA.wasReleased()) {
     if (!btnALong && !swallowBtnA) {
-      if (inPrompt) {
-        char cmd[96];
-        snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
-        sendCmd(cmd);
-        responseSent = true;
-        uint32_t tookS = (millis() - promptArrivedMs) / 1000;
-        statsOnApproval(tookS);
-        beep(2400, 60);
-        if (tookS < 5) triggerOneShot(P_HEART, 2000);
+      if (tama.promptId[0]) {
+        // swipe card owns decisions; a strip touch during a prompt is
+        // just the tail of a card drag — swallow it
       } else if (resetOpen) {
         beep(1800, 30);
         resetSel = (resetSel + 1) % RESET_N;
@@ -1134,13 +1271,8 @@ void loop() {
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
     else
-    if (inPrompt) {
-      char cmd[96];
-      snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
-      sendCmd(cmd);
-      responseSent = true;
-      statsOnDenial();
-      beep(600, 60);
+    if (tama.promptId[0]) {
+      // swipe card owns decisions — swallow strip touches during a prompt
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
