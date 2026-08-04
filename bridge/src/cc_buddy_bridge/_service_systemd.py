@@ -12,10 +12,13 @@ want the daemon to survive logout / start at boot.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from .claude_home import MULTI_ENV, daemon_config_dirs
 
 NAME = "systemd"
 UNIT_NAME = "cc-buddy-bridge.service"
@@ -32,6 +35,12 @@ def _build_unit(serial_port: str | None = None) -> str:
     env_line = (
         f'Environment="CC_BUDDY_SERIAL_PORT={serial_port}"\n' if serial_port else ""
     )
+    # See the launchd backend: a service-run daemon can't inherit a per-session
+    # $CLAUDE_CONFIG_DIR, so the homes to watch are baked in at install time.
+    dirs = daemon_config_dirs()
+    if dirs != [Path.home() / ".claude"]:
+        joined = os.pathsep.join(str(d) for d in dirs)
+        env_line += f'Environment="{MULTI_ENV}={joined}"\n'
     return (
         "[Unit]\n"
         "Description=Claude Code <-> desktop-buddy BLE bridge\n"

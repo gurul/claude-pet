@@ -56,7 +56,7 @@ def _sync_sweep(root: Path) -> JSONLTailer:
     async def cb(c, t, cc, ct, e):
         captured.append((c, t, cc, ct, e))
 
-    tailer = JSONLTailer(cb, root=root)
+    tailer = JSONLTailer(cb, roots=[root])
     asyncio.run(tailer._initial_sweep())
     return tailer
 

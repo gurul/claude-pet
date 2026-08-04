@@ -12,9 +12,15 @@ from cc_buddy_bridge import installer
 
 @pytest.fixture
 def temp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    p = tmp_path / "settings.json"
-    monkeypatch.setattr(installer, "SETTINGS_PATH", p)
-    return p
+    """Point $CLAUDE_CONFIG_DIR at a temp home.
+
+    Driving the real env var rather than patching a module constant is
+    deliberate: resolving the config home *is* the thing that regressed in
+    production (hooks silently installed into a home no session reads), so the
+    tests exercise that resolution instead of bypassing it.
+    """
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    return tmp_path / "settings.json"
 
 
 def _baseline(extra: dict | None = None) -> dict:

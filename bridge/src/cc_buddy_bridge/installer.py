@@ -1,19 +1,28 @@
-"""Install / uninstall cc-buddy-bridge hooks into ~/.claude/settings.json.
+"""Install / uninstall cc-buddy-bridge hooks into Claude Code's settings.json.
 
 We identify our entries by a marker substring in the command string
 (`cc_buddy_bridge.hooks.`). Non-cc-buddy-bridge hooks are left alone.
+
+Which settings.json is the load-bearing question: Claude Code reads its config
+from ``$CLAUDE_CONFIG_DIR`` when that is set and from ``~/.claude`` otherwise.
+Wrappers (era-code, and anything else running Claude Code against a private
+config home) set it. Installing into the wrong home fails *silently* — the
+hooks exist, the daemon runs, the board connects, and no session ever prompts,
+because the sessions you're actually running never read that file.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+from .claude_home import settings_path
+
 MARKER = "cc_buddy_bridge.hooks."
 HOOK_TIMEOUT_SECS = 330  # must be > daemon's PERMISSION_WAIT_SECS + a small buffer
 
@@ -51,36 +60,37 @@ def _is_our_entry(hook_obj: dict[str, Any]) -> bool:
     return isinstance(cmd, str) and MARKER in cmd
 
 
-def _load_settings() -> dict[str, Any]:
-    if not SETTINGS_PATH.exists():
+def _load_settings(path: Path) -> dict[str, Any]:
+    if not path.exists():
         return {}
-    with SETTINGS_PATH.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _save_settings(data: dict[str, Any]) -> None:
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SETTINGS_PATH.open("w", encoding="utf-8") as f:
+def _save_settings(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
 
-def _backup() -> Path:
+def _backup(path: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = SETTINGS_PATH.with_name(f"settings.json.ccbb-backup-{ts}")
-    shutil.copy2(SETTINGS_PATH, dest)
+    dest = path.with_name(f"settings.json.ccbb-backup-{ts}")
+    shutil.copy2(path, dest)
     return dest
 
 
-def install_hooks() -> int:
-    if not SETTINGS_PATH.exists():
-        print(f"settings.json not found at {SETTINGS_PATH}", file=sys.stderr)
+def install_hooks(config_dir: str | None = None) -> int:
+    path = settings_path(config_dir)
+    if not path.exists():
+        print(f"settings.json not found at {path}", file=sys.stderr)
         return 2
 
-    backup = _backup()
+    backup = _backup(path)
     print(f"backed up settings to {backup}")
 
-    data = _load_settings()
+    data = _load_settings(path)
     hooks = data.setdefault("hooks", {})
 
     added = 0
@@ -113,19 +123,20 @@ def install_hooks() -> int:
         })
         added += 1
 
-    _save_settings(data)
-    print(f"installed {added} hook(s) into {SETTINGS_PATH}")
+    _save_settings(path, data)
+    print(f"installed {added} hook(s) into {path}")
     if added == 0:
         print("(already up to date)")
     return 0
 
 
-def uninstall_hooks() -> int:
-    if not SETTINGS_PATH.exists():
-        print(f"settings.json not found at {SETTINGS_PATH}", file=sys.stderr)
+def uninstall_hooks(config_dir: str | None = None) -> int:
+    path = settings_path(config_dir)
+    if not path.exists():
+        print(f"settings.json not found at {path}", file=sys.stderr)
         return 2
 
-    data = _load_settings()
+    data = _load_settings(path)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         print("no hooks block — nothing to remove")
@@ -161,19 +172,23 @@ def uninstall_hooks() -> int:
         print("no cc-buddy-bridge hooks found — nothing to remove")
         return 0
 
-    backup = _backup()
+    backup = _backup(path)
     print(f"backed up settings to {backup}")
-    _save_settings(data)
-    print(f"removed {removed} hook(s) from {SETTINGS_PATH}")
+    _save_settings(path, data)
+    print(f"removed {removed} hook(s) from {path}")
     return 0
 
 
-def show_status() -> int:
-    print("Hooks:")
-    if not SETTINGS_PATH.exists():
-        print(f"  settings.json not found at {SETTINGS_PATH}")
+def show_status(config_dir: str | None = None) -> int:
+    path = settings_path(config_dir)
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    print(f"Hooks: ({path})")
+    if env_dir:
+        print(f"  CLAUDE_CONFIG_DIR={env_dir}")
+    if not path.exists():
+        print(f"  settings.json not found at {path}")
     else:
-        data = _load_settings()
+        data = _load_settings(path)
         hooks = data.get("hooks") or {}
         any_installed = False
         for event, entries in hooks.items():

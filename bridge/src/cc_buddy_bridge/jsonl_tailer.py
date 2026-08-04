@@ -15,14 +15,17 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional  # Optional used below
+from typing import Any, Awaitable, Callable, Optional, Sequence  # Optional used below
 
 from watchfiles import Change, awatch
 
 from . import pricing
+from .claude_home import transcript_roots
 
 log = logging.getLogger(__name__)
 
+# Kept as the single-home default for callers that want one root; the daemon
+# passes the full list from claude_home.transcript_roots() instead.
 TRANSCRIPT_ROOT = Path.home() / ".claude" / "projects"
 
 # Callback: async (tokens_cumulative, tokens_today, cost_cumulative, cost_today, entries) -> None.
@@ -41,12 +44,15 @@ class JSONLTailer:
     def __init__(
         self,
         on_update: TokensCallback,
-        root: Path = TRANSCRIPT_ROOT,
+        roots: Optional[Sequence[Path]] = None,
         on_assistant_text: Optional[AssistantTextCallback] = None,
     ) -> None:
         self.on_update = on_update
         self.on_assistant_text = on_assistant_text
-        self.root = root
+        # Several roots because one daemon serves sessions from more than one
+        # Claude Code config home (see claude_home.py). Aggregates are keyed by
+        # file path, so they sum across roots without further bookkeeping.
+        self.roots: list[Path] = list(roots) if roots else list(transcript_roots())
         # file path → (offset, session_tokens_output, per_day_tokens_output)
         self._offsets: dict[str, int] = {}
         self._tokens_per_file: dict[str, int] = {}
@@ -72,9 +78,11 @@ class JSONLTailer:
         self._pending_assistant_emits: list[tuple[str, str, str]] = []
 
     async def run(self) -> None:
-        if not self.root.exists():
-            log.warning("transcript root %s does not exist; creating", self.root)
-            self.root.mkdir(parents=True, exist_ok=True)
+        for r in self.roots:
+            if not r.exists():
+                log.warning("transcript root %s does not exist; creating", r)
+                r.mkdir(parents=True, exist_ok=True)
+        log.info("tailing transcripts: %s", ", ".join(str(r) for r in self.roots))
 
         # Initial sweep so aggregates are hot before any file event fires.
         # Marked "sweep not done" so _consume_obj skips the live-emit callback
@@ -88,7 +96,8 @@ class JSONLTailer:
 
         # Watch for changes. watchfiles yields sets of (Change, path).
         try:
-            async for changes in awatch(str(self.root), recursive=True, stop_event=None):
+            watched = [str(r) for r in self.roots]
+            async for changes in awatch(*watched, recursive=True, stop_event=None):
                 await self._handle_changes(changes)
                 await self._fire_pending_emits()
                 await self._emit()
@@ -131,7 +140,7 @@ class JSONLTailer:
                         seen.add(uuid)
 
     async def _initial_sweep(self) -> None:
-        for p in self.root.rglob("*.jsonl"):
+        for p in (p for r in self.roots for p in r.rglob("*.jsonl")):
             try:
                 self._process_file(str(p))
             except Exception as e:  # noqa: BLE001

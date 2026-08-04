@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any, Optional
 
 from .audit import AuditLog
@@ -697,7 +696,12 @@ def _log_permission_config_summary(matchers: MatcherConfig) -> None:
        Code's normal prompt UI.
     """
     import json
-    settings_path = Path.home() / ".claude" / "settings.json"
+
+    from .claude_home import claude_config_dirs
+    # The daemon serves every config home it was pointed at, so summarize the
+    # first one that actually exists rather than assuming ~/.claude.
+    candidates = [d / "settings.json" for d in claude_config_dirs()]
+    settings_path = next((p for p in candidates if p.exists()), candidates[0])
     default_mode: Optional[str] = None
     ask_count = 0
     if settings_path.exists():
@@ -717,8 +721,8 @@ def _log_permission_config_summary(matchers: MatcherConfig) -> None:
     )
     log.info("%s", matcher_summary)
     log.info(
-        "settings.json: permissions.defaultMode=%r ask=%d",
-        default_mode or "(unset)", ask_count,
+        "settings.json (%s): permissions.defaultMode=%r ask=%d",
+        settings_path, default_mode or "(unset)", ask_count,
     )
 
     if default_mode == "bypassPermissions" and not matchers.strict:

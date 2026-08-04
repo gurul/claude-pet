@@ -22,9 +22,11 @@ A desk pet that reacts to Claude Code activity, built by forking open-source rep
 | Audio | ES8311 codec + FM8002E amp (I2S MCLK4 BCLK5 WS7 DOUT8 DIN6, amp-en GPIO1) + onboard mic — **deferred to later phase** |
 | SD | 4-bit SD_MMC only (CLK38 CMD40 D0=39 D1=41 D2=48 D3=47) — unused |
 | Battery | ADC GPIO9, ÷2 divider; TP4054 charger |
-| Build | FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PSRAM=opi,PartitionScheme=default_16MB` (LittleFS on spiffs partition) |
+| Build | FQBN `esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PSRAM=opi,PartitionScheme=huge_app` — 3MB app at 0x10000, LittleFS on the 896KB `spiffs` partition at 0x310000 |
 
-USB-serial note: opening the S3 native USB CDC port does **not** reset the sketch (unlike UART-bridge boards), so a host daemon holding the port open is safe.
+USB-serial note: opening the S3 native USB CDC port does **not** reset the sketch (unlike UART-bridge boards), so a host daemon holding the port open is safe. It does hold it *exclusively*, though — unload the daemon before flashing or esptool cannot connect.
+
+Partition note: `huge_app` is a 4MB layout on a 16MB part, so ~12MB of flash is unaddressed and LittleFS gets 896KB. That is enough for the GIF character packs today. Moving to `default_16MB` (6.25MB app ×2 OTA + 3.5MB LittleFS) means relocating `spiffs` from 0x310000 to 0xc90000, so it needs a full `esptool erase-flash` first — see the partition gotcha in the README before attempting it.
 
 ## Architecture
 

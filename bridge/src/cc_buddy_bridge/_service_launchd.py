@@ -7,11 +7,14 @@ crashes. Logs stdout/stderr to ``~/Library/Logs/cc-buddy-bridge.log``.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from .claude_home import MULTI_ENV, daemon_config_dirs
 
 NAME = "launchd"
 LABEL = "com.github.cc-buddy-bridge.daemon"
@@ -49,6 +52,13 @@ def _build_plist(serial_port: str | None = None) -> bytes:
         # cli.py's daemon subcommand defaults --serial-port from this env
         # var, so the service uses USB serial instead of BLE.
         plist["EnvironmentVariables"]["CC_BUDDY_SERIAL_PORT"] = serial_port
+    # launchd starts the daemon outside any Claude Code session, so it can
+    # never inherit a per-session $CLAUDE_CONFIG_DIR. Bake in the homes to
+    # serve at install time — otherwise the daemon tails only ~/.claude and
+    # sessions run by a wrapper (era-code) report no tokens and no entries.
+    dirs = daemon_config_dirs()
+    if dirs != [Path.home() / ".claude"]:
+        plist["EnvironmentVariables"][MULTI_ENV] = os.pathsep.join(str(d) for d in dirs)
     return plistlib.dumps(plist)
 
 

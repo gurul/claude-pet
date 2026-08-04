@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import os
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -30,7 +30,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_daemon.add_argument("--log-level", default="INFO")
 
-    p_install = sub.add_parser("install", help="Register hooks in ~/.claude/settings.json")
+    CONFIG_DIR_HELP = (
+        "Claude Code config home to operate on (default: $CLAUDE_CONFIG_DIR, else ~/.claude). "
+        "Wrappers such as era-code run sessions against a private home — hooks installed into "
+        "the wrong one never fire and never warn."
+    )
+
+    p_install = sub.add_parser(
+        "install", help="Register hooks in Claude Code's settings.json")
+    p_install.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
     p_install.add_argument(
         "--service", action="store_true",
         help="Install a user-level service so the daemon auto-starts on login "
@@ -42,12 +50,15 @@ def main(argv: list[str] | None = None) -> int:
         help="With --service: bake this USB serial port (glob ok, e.g. '/dev/cu.usbmodem*') "
              "into the service so the daemon uses serial instead of BLE.",
     )
-    p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
+    p_uninstall = sub.add_parser(
+        "uninstall", help="Remove cc-buddy-bridge hooks from Claude Code's settings.json")
+    p_uninstall.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
     p_uninstall.add_argument(
         "--service", action="store_true",
         help="Remove the user-level service (launchd agent / systemd unit) instead of removing hooks",
     )
-    sub.add_parser("status", help="Show install status")
+    p_status = sub.add_parser("status", help="Show install status")
+    p_status.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
 
     p_hud = sub.add_parser(
         "hud",
@@ -106,16 +117,16 @@ def main(argv: list[str] | None = None) -> int:
             from .service import install_service
             return install_service(serial_port=getattr(args, "serial_port", None))
         from .installer import install_hooks
-        return install_hooks()
+        return install_hooks(config_dir=getattr(args, "config_dir", None))
     if args.cmd == "uninstall":
         if getattr(args, "service", False):
             from .service import uninstall_service
             return uninstall_service()
         from .installer import uninstall_hooks
-        return uninstall_hooks()
+        return uninstall_hooks(config_dir=getattr(args, "config_dir", None))
     if args.cmd == "status":
         from .installer import show_status
-        return show_status()
+        return show_status(config_dir=getattr(args, "config_dir", None))
     if args.cmd == "hud":
         from .hud import run as hud_run
         return hud_run(ascii_only=args.ascii, socket_path=args.socket)

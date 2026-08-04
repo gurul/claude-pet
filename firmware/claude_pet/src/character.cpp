@@ -141,8 +141,18 @@ bool characterInit(const char* name) {
   if (!LittleFS.begin(false)) {
     // begin() fails if already mounted — that's fine on reload
     if (!LittleFS.open("/")) {
-      Serial.println("[char] LittleFS mount failed");
-      return false;
+      // Genuinely unmountable: a freshly flashed board has a spiffs partition
+      // that has never been formatted, and begin(false) will not format it, so
+      // it stays at fsTotal=0 forever and every character push is rejected.
+      // Format once and retry. The only thing on this partition is GIF packs,
+      // which are re-pushable from the host, so reformatting costs nothing —
+      // whereas an unformatted partition blocks the feature permanently.
+      Serial.println("[char] LittleFS mount failed — formatting");
+      if (!LittleFS.format() || !LittleFS.begin(false)) {
+        Serial.println("[char] LittleFS format failed");
+        return false;
+      }
+      Serial.println("[char] LittleFS formatted");
     }
   }
 

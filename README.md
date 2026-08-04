@@ -114,10 +114,37 @@ If the flasher still can't connect: hold **BOOT**, tap **RESET**, release BOOT, 
 cd bridge
 python3.12 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/cc-buddy-bridge daemon --serial-port '/dev/cu.usbmodem*'   # keep running
-.venv/bin/cc-buddy-bridge install    # registers 7 hooks in ~/.claude/settings.json
+.venv/bin/cc-buddy-bridge install    # registers 7 hooks in Claude Code's settings.json
 .venv/bin/cc-buddy-bridge install --service --serial-port '/dev/cu.usbmodem*'
                                      # auto-start the daemon on login (launchd/systemd)
 ```
+
+### Which Claude config home?
+
+Claude Code reads its settings and writes its transcripts under `$CLAUDE_CONFIG_DIR`
+when that is set, and `~/.claude` otherwise. Wrappers set it — era-code, for one, runs
+every session against a private config home.
+
+This matters because installing into the wrong home **fails silently**: the hooks are
+written, the daemon runs, the board connects and animates, and no session ever prompts,
+because the sessions you actually run never read that file. Nothing errors.
+
+`install` / `uninstall` / `status` follow `$CLAUDE_CONFIG_DIR` by default and take
+`--config-dir` to target a specific home. `status` prints the path it resolved, which is
+the fastest way to check you configured the home you're actually using:
+
+```bash
+.venv/bin/cc-buddy-bridge status                                  # honours $CLAUDE_CONFIG_DIR
+.venv/bin/cc-buddy-bridge install --config-dir ~/.claude          # plain sessions
+.venv/bin/cc-buddy-bridge install --config-dir ~/.era/era-code/claude-home
+```
+
+The daemon is the awkward case: it's a launchd agent / systemd unit started outside any
+session, so it can never inherit a per-session `$CLAUDE_CONFIG_DIR`. It reads
+`CC_BUDDY_CLAUDE_CONFIG_DIRS` — an `os.pathsep`-separated list of homes to serve — and
+`install --service` bakes the union of your current home and `~/.claude` into the service
+definition. One daemon then covers both, tailing every home's `projects/` tree for tokens
+and transcript entries. Watch for `tailing transcripts: …` in the log to confirm.
 
 Hook flow: trivial Bash commands are auto-allowed, risky ones (`git push`, `rm`, …) prompt
 **on the pet** with a 300s timeout falling back to the terminal, everything else uses
@@ -125,6 +152,11 @@ Claude Code's normal flow. Whenever Claude is blocked on you — a permission pr
 terminal, or it's idle waiting for input — the `Notification` hook puts the pet into its
 **attention** animation (impatient pet + pulsing orange LED) until you respond.
 `cc-buddy-bridge audit` shows the decision log.
+
+The matcher patterns are **anchored at the start of the command** (`^chmod( |$)`,
+`^git push( |$)`, …). A leading variable assignment or `cd` defeats them —
+`SP=/tmp chmod 644 $SP/f` does not match `^chmod` and quietly takes the default path
+instead of prompting. Worth knowing when a command you expected to gate doesn't.
 
 ## Porting notes
 
@@ -136,6 +168,12 @@ terminal, or it's idle waiting for input — the `Notification` hook puts the pe
   Bluedroid code; USB serial replaces it entirely. Restore from upstream if you want desktop-app pairing.
 - **HWCDC gotcha:** the S3 drops all `Serial` TX unless the host asserts **DTR** — `cat`
   won't see output; pyserial with `dtr=True` will. Opening the port does *not* reset the sketch.
+- **LittleFS formats itself on first boot.** A freshly flashed board has a `spiffs`
+  partition that has never been formatted, and `LittleFS.begin(false)` will not format it —
+  it stays at `fsTotal=0` forever and the daemon rejects every character push with
+  *"stick LittleFS appears unformatted"* once a minute. `characterInit()` now formats once
+  when the mount genuinely fails. Safe to do: the partition only holds GIF packs, which are
+  re-pushable from the host, whereas an unformatted partition blocks the feature for good.
 - **Partition gotcha:** a sketch-local `partitions.csv` is silently ignored by arduino-cli +
   esp32 3.3.10 — the flash ended up with a stale default table and an unbootable app.
   Use an explicit `PartitionScheme` and, when in doubt, `esptool erase-flash` first.
