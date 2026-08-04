@@ -153,6 +153,16 @@ terminal, or it's idle waiting for input — the `Notification` hook puts the pe
 **attention** animation (impatient pet + pulsing orange LED) until you respond.
 `cc-buddy-bridge audit` shows the decision log.
 
+**If the board shows "No Claude connected" while the daemon looks healthy**, the
+serial link has gone one-way. A USB re-enumeration — which every board reset causes,
+including the one esptool triggers on flash — leaves the host holding a file
+descriptor that no longer reaches the device: writes succeed into the void, reads
+return empty, and nothing raises, so the daemon reports itself connected forever.
+The transport now watches for this: the firmware prints `[alive]` every 5s, so
+20s of total silence is treated as a stale handle and forces a reconnect
+(`serial: no data from board for 20s …` in the log). Restarting the daemon also
+clears it.
+
 The matcher patterns are **anchored at the start of the command** (`^chmod( |$)`,
 `^git push( |$)`, …). A leading variable assignment or `cd` defeats them —
 `SP=/tmp chmod 644 $SP/f` does not match `^chmod` and quietly takes the default path

@@ -16,6 +16,7 @@ import asyncio
 import glob
 import json
 import logging
+import time
 from typing import Any, Awaitable, Callable, Optional
 
 import serial  # pyserial
@@ -27,6 +28,22 @@ log = logging.getLogger(__name__)
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 RECONNECT_SECS = 3.0
+
+# Treat the link as dead after this long with no bytes read at all.
+#
+# A USB re-enumeration — which every board reset causes, including the one
+# esptool triggers on flash — leaves the host holding a file descriptor that no
+# longer reaches the device. Writes succeed into the void, reads return empty,
+# and nothing ever raises, so `connected` stays True forever: the daemon looks
+# healthy, the log is clean, and the board sits there showing "No Claude
+# connected". Only an exception used to trigger reconnect, and a stale fd never
+# produces one.
+#
+# The firmware prints "[alive] ..." every 5s unconditionally (main.cpp), so
+# silence this long means four missed pings and is unambiguous. Keep this in
+# sync with that interval — if the firmware's heartbeat changes, this must too,
+# or the transport will flap.
+RX_SILENCE_SECS = 20.0
 
 
 def _resolve_port(pattern: str) -> Optional[str]:
@@ -94,9 +111,24 @@ class BuddySerial:
             self._connected_evt.set()
             log.info("serial connected: %s @ %d", port, self.baud)
             buf = b""
+            # Grace period starts now: a board mid-boot hasn't printed yet.
+            last_rx = time.monotonic()
             try:
                 while not self._stop.is_set():
                     chunk = await loop.run_in_executor(None, ser.readline)
+                    if not chunk:
+                        # readline returned on its 1s timeout. Silence past the
+                        # watchdog means the fd is stale — drop it and let the
+                        # outer loop re-resolve the port glob and reopen.
+                        if time.monotonic() - last_rx > RX_SILENCE_SECS:
+                            log.warning(
+                                "serial: no data from board for %.0fs — assuming stale "
+                                "handle (USB re-enumeration?), reconnecting",
+                                RX_SILENCE_SECS,
+                            )
+                            break
+                        continue
+                    last_rx = time.monotonic()
                     if chunk:
                         buf += chunk
                         if not buf.endswith(b"\n"):
