@@ -22,13 +22,16 @@ UNIT_NAME = "cc-buddy-bridge.service"
 UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / UNIT_NAME
 
 
-def _build_unit() -> str:
+def _build_unit(serial_port: str | None = None) -> str:
     """Render the .service unit file.
 
     ``ExecStart`` uses the Python interpreter that's running *this* install
     command — same trick as the macOS plist — so the unit picks up the venv
     that has bleak and watchfiles installed.
     """
+    env_line = (
+        f'Environment="CC_BUDDY_SERIAL_PORT={serial_port}"\n' if serial_port else ""
+    )
     return (
         "[Unit]\n"
         "Description=Claude Code <-> desktop-buddy BLE bridge\n"
@@ -36,6 +39,7 @@ def _build_unit() -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
+        f"{env_line}"
         f"ExecStart={sys.executable} -m cc_buddy_bridge.cli daemon\n"
         "Restart=on-failure\n"
         "RestartSec=5\n"
@@ -52,13 +56,13 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def install() -> int:
+def install(serial_port: str | None = None) -> int:
     if shutil.which("systemctl") is None:
         print("cc-buddy-bridge: `systemctl` not found on PATH", file=sys.stderr)
         return 2
 
     UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    UNIT_PATH.write_text(_build_unit(), encoding="utf-8")
+    UNIT_PATH.write_text(_build_unit(serial_port), encoding="utf-8")
 
     reload_res = _systemctl("daemon-reload")
     if reload_res.returncode != 0:

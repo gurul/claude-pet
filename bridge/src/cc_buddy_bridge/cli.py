@@ -36,6 +36,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Install a user-level service so the daemon auto-starts on login "
              "(macOS: launchd agent; Linux: systemd user unit) instead of registering hooks",
     )
+    p_install.add_argument(
+        "--serial-port",
+        default=os.environ.get("CC_BUDDY_SERIAL_PORT") or None,
+        help="With --service: bake this USB serial port (glob ok, e.g. '/dev/cu.usbmodem*') "
+             "into the service so the daemon uses serial instead of BLE.",
+    )
     p_uninstall = sub.add_parser("uninstall", help="Remove cc-buddy-bridge hooks from ~/.claude/settings.json")
     p_uninstall.add_argument(
         "--service", action="store_true",
@@ -98,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "install":
         if getattr(args, "service", False):
             from .service import install_service
-            return install_service()
+            return install_service(serial_port=getattr(args, "serial_port", None))
         from .installer import install_hooks
         return install_hooks()
     if args.cmd == "uninstall":

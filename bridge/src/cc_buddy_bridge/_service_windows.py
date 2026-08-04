@@ -12,14 +12,15 @@ TASK_NAME = "cc-buddy-bridge-daemon"
 LOG_PATH = Path.home() / "AppData" / "Local" / "cc-buddy-bridge" / "daemon.log"
 
 
-def install() -> int:
+def install(serial_port: str | None = None) -> int:
     if shutil.which("schtasks") is None:
         print("cc-buddy-bridge: `schtasks` not found on PATH", file=sys.stderr)
         return 2
 
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = f'"{sys.executable}" -m cc_buddy_bridge.cli daemon >> "{LOG_PATH}" 2>&1'
+    env_prefix = f'set "CC_BUDDY_SERIAL_PORT={serial_port}" && ' if serial_port else ""
+    cmd = f'{env_prefix}"{sys.executable}" -m cc_buddy_bridge.cli daemon >> "{LOG_PATH}" 2>&1'
 
     result = subprocess.run(
         [

@@ -19,7 +19,7 @@ PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 LOG_PATH = Path.home() / "Library" / "Logs" / "cc-buddy-bridge.log"
 
 
-def _build_plist() -> bytes:
+def _build_plist(serial_port: str | None = None) -> bytes:
     """Render the plist as XML bytes.
 
     ``ProgramArguments`` uses the Python interpreter that's running *this*
@@ -45,17 +45,21 @@ def _build_plist() -> bytes:
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         },
     }
+    if serial_port:
+        # cli.py's daemon subcommand defaults --serial-port from this env
+        # var, so the service uses USB serial instead of BLE.
+        plist["EnvironmentVariables"]["CC_BUDDY_SERIAL_PORT"] = serial_port
     return plistlib.dumps(plist)
 
 
-def install() -> int:
+def install(serial_port: str | None = None) -> int:
     if shutil.which("launchctl") is None:
         print("cc-buddy-bridge: `launchctl` not found on PATH", file=sys.stderr)
         return 2
 
     PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PLIST_PATH.write_bytes(_build_plist())
+    PLIST_PATH.write_bytes(_build_plist(serial_port))
 
     # Unload first so idempotent re-install picks up any new interpreter path.
     subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
