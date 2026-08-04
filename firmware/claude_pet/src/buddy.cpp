@@ -34,6 +34,12 @@ const uint16_t BUDDY_BLUE   = 0x041F;
 // fixed — species hardcode BUDDY_X_CENTER/BUDDY_Y_OVERLAY in their
 // particle calls, so retargeting position would only move the body.
 static TFT_eSPI* _tgt = &spr;
+
+// True while buddyRenderTo has retargeted drawing at the physical LCD —
+// i.e. the landscape-clock path, whose pet box is only x<115. Vector
+// species use this to recenter so their self-clear can't wipe the clock
+// digits (ASCII species merely spill; a solid clear box erases).
+bool buddyRenderTargetIsExternal() { return _tgt != &spr; }
 // 3× on the 240x320 home screen, 2× in peek (PET/INFO). Species art is
 // space-padded to a fixed width for alignment at 1×; at >1× we trim and
 // re-center per line so the padding doesn't push ink off-screen.
@@ -68,6 +74,14 @@ void buddySetCursor(int x, int y) {
 void buddySetColor(uint16_t fg)   { _tgt->setTextColor(fg, BUDDY_BG); }
 void buddyPrint(const char* s)    { _tgt->setTextSize(_scale); _tgt->print(s); }
 
+// 1x-coordinate vector fill for op-replay species — same transform as
+// buddySetCursor so vector art scales with peek/home and follows the
+// render-target swap in buddyRenderTo.
+void buddyFillRect(int x, int y, int w, int h, uint16_t color) {
+  _tgt->fillRect(BUDDY_X_CENTER + (x - BUDDY_X_CENTER) * _scale,
+                 y * _scale, w * _scale, h * _scale, color);
+}
+
 // ──────────────── species registry ────────────────
 extern const Species CAPYBARA_SPECIES;
 extern const Species DUCK_SPECIES;
@@ -87,13 +101,16 @@ extern const Species ROBOT_SPECIES;
 extern const Species RABBIT_SPECIES;
 extern const Species MUSHROOM_SPECIES;
 extern const Species CHONK_SPECIES;
+extern const Species BONGO_SPECIES;
 
+// Append new species at the END — the saved NVS species index is
+// positional, so inserting mid-table would remap everyone's buddy.
 static const Species* SPECIES_TABLE[] = {
   &CAPYBARA_SPECIES, &DUCK_SPECIES, &GOOSE_SPECIES, &BLOB_SPECIES,
   &CAT_SPECIES, &DRAGON_SPECIES, &OCTOPUS_SPECIES, &OWL_SPECIES,
   &PENGUIN_SPECIES, &TURTLE_SPECIES, &SNAIL_SPECIES, &GHOST_SPECIES,
   &AXOLOTL_SPECIES, &CACTUS_SPECIES, &ROBOT_SPECIES, &RABBIT_SPECIES,
-  &MUSHROOM_SPECIES, &CHONK_SPECIES,
+  &MUSHROOM_SPECIES, &CHONK_SPECIES, &BONGO_SPECIES,
 };
 static const uint8_t N_SPECIES = sizeof(SPECIES_TABLE) / sizeof(SPECIES_TABLE[0]);
 static uint8_t currentSpeciesIdx = 0;

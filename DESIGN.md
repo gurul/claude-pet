@@ -57,6 +57,22 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
 Everything else (data.h, stats.h, xfer.h, character.cpp GIF renderer, 18 species) ports unchanged
 apart from geometry constants (`BUDDY_X_CENTER` 67→120, canvas 135→240, layout scale).
 
+## Vector species — bongo cat
+
+The 19th species (`src/buddies/bongo.cpp`) is the first non-ASCII buddy: each of the 7
+persona states replays a per-frame table of 1-bit `px/rect/line` ops (`on:true` inks white,
+`on:false` carves background; op order is load-bearing). Tables live in the **generated**
+header `src/buddies/bongo_art.h` — produced by `node tools/gen-bongo-art.mjs` from the
+petlab candidates (`era-maker/tools/petlab/candidates/char-bongo-*.mjs`); re-run the script
+instead of editing it. Rendering goes through a new scale-aware helper `buddyFillRect()`
+(buddy_common.h): ops are authored on a 128×64 panel grid, doubled (K=2) into 1x buddy
+coordinates anchored to the ASCII ground line (y=70), then multiplied by the shared
+peek/home scale and routed through the same render-target indirection as text species.
+Lines are stepped with Bresenham in art space so their thickness scales too. Each frame
+first clears the species' own bounding box, because the landscape-clock `buddyRenderTo`
+path only clears x<115 while the cat's desk spans past it. Authored `frameMs` is quantized
+to the 200ms buddy tick (`ticksPerFrame`).
+
 ## Swipe-card approvals
 
 Permission prompts render as a draggable card (`main.cpp`, `CARD_*` constants + `drawApproval`)

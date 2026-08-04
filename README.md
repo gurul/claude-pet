@@ -12,7 +12,10 @@ Built by porting two MIT-licensed open-source projects to the
 
 - **Firmware:** fork of [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) —
   the official 7-state pet (18 ASCII species + GIF character packs), retargeted from the
-  M5StickC Plus to this board's ILI9341 240×320 panel + FT6336G capacitive touch.
+  M5StickC Plus to this board's ILI9341 240×320 panel + FT6336G capacitive touch. A 19th
+  species, **bongo** (head-on white bongo cat tapping at a desk edge), is drawn from
+  vector op tables instead of ASCII — the art is authored in petlab and regenerated with
+  `node tools/gen-bongo-art.mjs`, never hand-edited (see `src/buddies/bongo.cpp`).
 - **Host bridge:** fork of [SnowWarri0r/cc-buddy-bridge](https://github.com/SnowWarri0r/cc-buddy-bridge) —
   Claude Code CLI hooks → Unix socket → daemon, extended with a **USB CDC serial transport**
   (`serial_transport.py`) replacing BLE, since the board sits on USB anyway.
