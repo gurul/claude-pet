@@ -1,4 +1,4 @@
-# Claude Pet 🐾
+# Agent Pet 🐾
 
 ![claude pet — esp32 desk pet for claude code](docs/assets/thumbnail.png)
 
