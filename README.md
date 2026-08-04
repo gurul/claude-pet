@@ -62,6 +62,21 @@ Approve maps to Claude Code's *allow once*; deny is *deny*. Fast approvals (<5s)
 heart. While a prompt is up, the tap zones and pet gestures are suspended so a swipe
 crossing them can't change screens or dizzy the pet.
 
+### The clock face
+
+When the board is on USB power and genuinely idle — no menu, no prompt, no running or
+waiting sessions, and the bridge has synced the RTC — the home screen becomes a clock
+with the pet dozing underneath. A heartbeat alone doesn't count as activity, since it's
+the only way the RTC ever gets set.
+
+The time reads **12-hour with AM/PM** (`1:05` / `:07 PM`), hour space-padded rather than
+zero-padded. That padding is load-bearing: both the portrait and landscape faces centre
+the time and repaint only their own glyph cells, so a 5→4 character shrink at 12:59 → 1:00
+would strand pixels; the leading space draws as a background-filled cell and clears them.
+
+The pet's mood on the clock screen still runs off the real 24-hour hour — asleep 1–7am and
+after 10pm, hearts at noon, celebrating Friday afternoons, lazier on weekends.
+
 ## Build & flash (firmware)
 
 ```bash
@@ -72,10 +87,26 @@ FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PSRAM=opi,Pa
 arduino-cli compile -b "$FQBN" \
   --build-property "compiler.cpp.extra_flags=-DUSER_SETUP_LOADED=1 -include $PWD/firmware/claude_pet/tft_setup.h" \
   firmware/claude_pet
+
+# Free the serial port first — the bridge daemon holds it exclusively (see below)
+launchctl bootout gui/$(id -u)/com.github.cc-buddy-bridge.daemon      # macOS
+# systemctl --user stop cc-buddy-bridge                               # Linux
+
 arduino-cli upload -p /dev/cu.usbmodem* -b "$FQBN" firmware/claude_pet
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+# systemctl --user start cc-buddy-bridge
 ```
 
-If the flasher can't connect: hold **BOOT**, tap **RESET**, release BOOT, retry.
+**Unload the daemon before flashing.** If it's installed as a service it owns
+`/dev/cu.usbmodem*` for as long as it runs, and esptool fails with
+`A fatal error occurred: Failed to connect to ESP32-S3: No serial data received.`
+That looks identical to a bricked board — check `lsof /dev/cu.usbmodem*` before
+reaching for recovery steps. `launchctl stop` is not enough: the plist sets
+`KeepAlive`, so launchd restarts the daemon immediately and it retakes the port.
+Use `bootout` / `bootstrap` (or `systemctl --user stop` / `start`).
+
+If the flasher still can't connect: hold **BOOT**, tap **RESET**, release BOOT, retry.
 
 ## Host bridge
 

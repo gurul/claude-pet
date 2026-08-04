@@ -408,10 +408,22 @@ static const char* const MON[] = {
 static const char* const DOW[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
 static uint8_t clockDow() { return _clkDt.WeekDay % 7; }
+
+// 12-hour face. The hour is space-padded rather than zero-padded so the
+// string keeps a constant width: both faces centre the time with MC_DATUM
+// and only repaint their own glyph cells, so a 5→4 char shrink (12:59 → 1:00)
+// would strand pixels. A leading space is drawn as a background-filled cell,
+// which clears them. Mood logic below still reads the raw 24h _clkTm.Hours.
+static uint8_t clockHour12() {
+  uint8_t h = _clkTm.Hours % 12;
+  return h == 0 ? 12 : h;
+}
+static const char* clockMeridiem() { return _clkTm.Hours < 12 ? "AM" : "PM"; }
+
 static void drawClock() {
   const Palette& p = characterPalette();
-  char hm[6]; snprintf(hm, sizeof(hm), "%02u:%02u", _clkTm.Hours, _clkTm.Minutes);
-  char ss[4]; snprintf(ss, sizeof(ss), ":%02u", _clkTm.Seconds);
+  char hm[6]; snprintf(hm, sizeof(hm), "%2u:%02u", clockHour12(), _clkTm.Minutes);
+  char ss[8]; snprintf(ss, sizeof(ss), ":%02u %s", _clkTm.Seconds, clockMeridiem());
   uint8_t mi = (_clkDt.Month >= 1 && _clkDt.Month <= 12) ? _clkDt.Month - 1 : 0;
   char dl[8]; snprintf(dl, sizeof(dl), "%s %02u", MON[mi], _clkDt.Date);
 
@@ -441,7 +453,7 @@ static void drawClock() {
   if (repaint || _clkTm.Seconds != lastSec) {
     lastSec = _clkTm.Seconds;
     char wdl[12]; snprintf(wdl, sizeof(wdl), "%s %s %02u", DOW[clockDow()], MON[mi], _clkDt.Date);
-    char ssl[3]; snprintf(ssl, sizeof(ssl), "%02u", _clkTm.Seconds);
+    char ssl[7]; snprintf(ssl, sizeof(ssl), "%02u %s", _clkTm.Seconds, clockMeridiem());
     M5.Lcd.setTextDatum(MC_DATUM);
     M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
     M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
