@@ -287,6 +287,30 @@ class VoiceHold:
         print("\nReady — hold the pet to dictate.")
         return 0
 
+    @staticmethod
+    def _tap_via_system_events(keycode: int) -> bool:
+        """Deliver a key through System Events instead of CGEventPost.
+
+        Warp ignores CGEventPost synthetics — the Enter arrives, the log says
+        it was tapped, and nothing submits, while the identical event works in
+        every other app. System Events posts through a different path that
+        Warp does accept. Costs a subprocess (~40ms), so it is opt-in.
+        """
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["osascript", "-e",
+                 f'tell application "System Events" to key code {keycode}'],
+                capture_output=True, text=True, timeout=5)
+            if r.returncode != 0:
+                log.warning("key: System Events failed: %s",
+                            r.stderr.strip()[:200])
+                return False
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("key: System Events error: %s", e)
+            return False
+
     def tap(self, name: str) -> bool:
         """Press and release one allowlisted key (swipe-down → Enter).
 
@@ -312,6 +336,13 @@ class VoiceHold:
                 log.warning("key: Accessibility not granted — see `voice-check`")
                 return False
             self._trust_check = None
+        method = (os.environ.get("CC_BUDDY_KEY_METHOD") or "auto").strip().lower()
+        if method in ("osascript", "system-events"):
+            ok = self._tap_via_system_events(key)
+            log.info("key: tapped %s via System Events (%s)", name,
+                     "ok" if ok else "FAILED")
+            return ok
+
         self._poster(key, True, 0, False)
         # Hold briefly. A down/up in the same microsecond is not a keypress any
         # human could produce, and apps that debounce or sample input on a

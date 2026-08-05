@@ -102,6 +102,14 @@ Touching the pet is functional only: tap-for-heart and scrub-for-dizzy were
 removed by owner decree — the pet's moods come from Claude's state, not from
 being poked.
 
+**If Enter lands in the wrong place** (Warp is the known case — it routes
+CGEventPost synthetics to its own "Warp anything" agent bar instead of the
+focused terminal pane, so the Return appears to open a new input rather than
+submit), set `CC_BUDDY_KEY_METHOD=osascript`. That delivers the key through
+System Events / the accessibility API, which targets the actually-focused
+element. It costs a ~40ms subprocess per press, which is why it is opt-in
+rather than the default.
+
 The host allowlists exactly one key. A peripheral on a serial line asking for
 arbitrary keystrokes is a far larger surface than this feature needs, so
 `{"cmd":"key","name":...}` accepts only `enter`. It is also refused while a
