@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -16,7 +17,7 @@ from .audit import AuditLog
 from .ble import BuddyBLE
 from .ipc import IPCServer
 from .jsonl_tailer import JSONLTailer
-from .matchers import MatcherConfig, classify_command
+from .matchers import MatcherConfig, classify_command, derive_always_pattern
 from .matchers import load_config as load_matcher_config
 from .protocol import (
     ENTRY_MAX_BYTES,
@@ -74,6 +75,9 @@ class Daemon:
         # Read scopes (git-repo roots / parent dirs) the user has approved via
         # a card swipe. Daemon-lifetime by design — restart forgets all grants.
         self._read_scopes: set[str] = set()
+        # Command shapes granted "always" from the stick (card held at the
+        # approve edge). In-memory only — a bad grant dies with the daemon.
+        self._stick_always: list[re.Pattern[str]] = []
         # Hold-the-pet push-to-talk: holds Opt+Space (VoiceFlow) between the
         # stick's voice start/stop events. Lazily constructed on first use so
         # non-mac / Quartz-less hosts pay nothing.
@@ -493,6 +497,14 @@ class Daemon:
             self.audit.record(**audit_kwargs, decision="allow", source="auto_allow")
             return {"ok": True, "decision": "allow"}
 
+        # A prior card was held at the approve edge ("always") for this
+        # command shape — approve without another round-trip. Checked after
+        # auto_allow but before the stick, so it silences repeat prompts.
+        if decision_class == "ask" and any(rx.search(hint) for rx in self._stick_always):
+            log.info("pretooluse for %s (%s): stick always-allow → allow", tool_name, hint[:60])
+            self.audit.record(**audit_kwargs, decision="allow", source="stick_always")
+            return {"ok": True, "decision": "allow"}
+
         # If BLE isn't connected, skip the round-trip and return no decision so
         # Claude Code's normal flow runs (respects user's auto/allow settings).
         if not self.ble.connected:
@@ -649,11 +661,21 @@ class Daemon:
         if cmd == "permission":
             tool_use_id = obj.get("id")
             decision = obj.get("decision")
-            if decision not in ("once", "deny"):
+            if decision not in ("once", "always", "deny"):
                 log.warning("ignoring permission with unknown decision: %r", obj)
                 return
-            # Map REFERENCE.md's "once" to Claude Code's "allow".
-            mapped = "allow" if decision == "once" else "deny"
+            # "always" = approve AND stop carding this command shape for the
+            # daemon's lifetime (the card was held at the approve edge).
+            # Bash only — Read approvals already grant their whole scope.
+            # Registered BEFORE resolving the future, which clears the pending.
+            if decision == "always":
+                p = self.state.find_pending_by_id(str(tool_use_id or ""))
+                if p is not None and p.tool_name == "Bash" and p.hint:
+                    pattern = derive_always_pattern(p.hint)
+                    self._stick_always.append(re.compile(pattern))
+                    log.info("stick always-allow: %s (from %r)", pattern, p.hint[:60])
+            # Map the stick's once/always to Claude Code's "allow".
+            mapped = "deny" if decision == "deny" else "allow"
             fut = self._permission_futures.get(tool_use_id or "")
             if fut is not None and not fut.done():
                 log.info(

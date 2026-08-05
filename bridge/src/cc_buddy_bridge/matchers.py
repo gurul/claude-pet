@@ -235,6 +235,21 @@ def load_config(path: Path | None = None) -> MatcherConfig:
     )
 
 
+def derive_always_pattern(command: str) -> str:
+    """Pattern for a stick "always" grant: the command's first two words,
+    the same shape as the built-in rules ("git push origin main" →
+    "^git\\ push( |$)"). One word if the command is bare or the second
+    token is a flag — "ls -la" should grant ls, not pin the exact flags.
+    Everything is re.escape()d, so shell metacharacters match literally.
+    """
+    words = command.strip().split()[:2]
+    if not words:
+        return r"^$"
+    if len(words) == 2 and words[1].startswith("-"):
+        words = words[:1]
+    return "^" + re.escape(" ".join(words)) + r"( |$)"
+
+
 def classify_command(command: str, cfg: MatcherConfig) -> Decision:
     """Returns "allow" | "ask" | "default".
 

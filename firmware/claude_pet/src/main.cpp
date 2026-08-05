@@ -364,6 +364,8 @@ static int   cardGrabX = 0;
 static int   cardGrabY = 0;   // for the swipe-up focus gesture
 static bool  cardTouchPrev = false;
 static bool  cardArmed = false;        // past-threshold beep latch
+static uint32_t cardArmedAtMs = 0;     // when the approve threshold was crossed
+static bool  cardAlways = false;       // held at the edge 700ms: approve → "always"
 const int    CARD_W = 210, CARD_H = 80;
 const int    CARD_BAND_Y = 204;
 const int    CARD_CX = 120, CARD_CY = 262;
@@ -377,11 +379,14 @@ static float cardRatio() {
   return r;
 }
 
-static void sendDecision(bool approve) {
-  char cmd[96];
+// decision: "once" | "always" | "deny". "always" is an approve that also
+// asks the daemon to stop prompting for this command shape (daemon-lifetime).
+static void sendDecision(const char* decision) {
+  bool approve = strcmp(decision, "deny") != 0;
+  char cmd[104];
   snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}",
-           tama.promptId, approve ? "once" : "deny");
-  diagLog("decision %s", approve ? "approve" : "deny");
+           tama.promptId, decision);
+  diagLog("decision %s", decision);
   sendCmd(cmd);
   responseSent = true;
   if (approve) {
@@ -456,10 +461,11 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
     if (bw > 0) g->fillRect(ox + 8, oy + CARD_H - 5, bw, 2, closing ? HOT : p.textDim);
   }
 
-  // Stamp fades in past ~30% of the commit distance
+  // Stamp fades in past ~30% of the commit distance. Holding at the right
+  // edge for 700ms upgrades it to ALWAYS (chirp + label swap).
   if (fabsf(r) > 0.3f) {
     bool ok = r > 0;
-    const char* s = ok ? "APPROVE" : "DENY";
+    const char* s = ok ? (cardAlways ? "ALWAYS" : "APPROVE") : "DENY";
     uint16_t c = ok ? GREEN : HOT;
     int tw = (int)strlen(s) * 12;
     int sx = ox + (CARD_W - tw) / 2, sy = oy + CARD_H / 2 - 8;
@@ -749,7 +755,7 @@ void loop() {
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
       cardPhase = CARD_REST;
-      cardX = 0; cardVel = 0; cardArmed = false;
+      cardX = 0; cardVel = 0; cardArmed = false; cardAlways = false;
       if (!cardSpr.created()) cardSpr.createSprite(CARD_W, CARD_H);
     } else {
       // Prompt resolved — free the card sprite and repaint everything so
@@ -784,8 +790,16 @@ void loop() {
           cardVel = nx - cardX;
           cardX = nx;
           bool past = fabsf(cardRatio()) >= 1.0f;
-          if (past && !cardArmed) beep(1800, 20);
+          if (past && !cardArmed) { beep(1800, 20); cardArmedAtMs = millis(); }
           cardArmed = past;
+          // Dwell at the approve edge upgrades the decision to "always" —
+          // approve AND stop prompting for this command shape. Deliberately
+          // impossible to hit from a plain flick: it needs a 700ms hold
+          // past the threshold, and retreating disarms it.
+          bool alwaysNow = cardArmed && cardX > 0
+                           && millis() - cardArmedAtMs >= 700;
+          if (alwaysNow && !cardAlways) beep(2600, 50);
+          cardAlways = alwaysNow;
           lastInteractMs = millis();
         } else {                               // release
           // Swipe UP = "show me": raise that session's terminal on the Mac.
@@ -805,12 +819,13 @@ void loop() {
             beep(1500, 25);
             cardPhase = CARD_SNAP;
             cardArmed = false;
+            cardAlways = false;
           } else {
           bool commit = fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
           if (commit) {
             float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
             bool approve = m > 0;
-            sendDecision(approve);
+            sendDecision(approve ? (cardAlways ? "always" : "once") : "deny");
             cardPhase = CARD_FLY;
             float dir = approve ? 1.0f : -1.0f;
             cardVel = fmaxf(fabsf(cardVel), 16.0f) * dir;
@@ -818,6 +833,7 @@ void loop() {
             cardPhase = CARD_SNAP;
           }
           cardArmed = false;
+          cardAlways = false;
           }
         }
       }

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cc_buddy_bridge.matchers import (
+    derive_always_pattern,
     MatcherConfig,
     classify_command,
     load_config,
@@ -163,3 +164,45 @@ def test_strict_with_replace_defaults(tmp_path: Path):
     assert classify_command("safe x", cfg) == "allow"
     assert classify_command("ls", cfg) == "ask"  # ls no longer pre-approved
     assert classify_command("rm x", cfg) == "ask"  # rm no longer always_ask
+
+
+# ---- derive_always_pattern (stick "always" grants) ----
+
+def test_always_pattern_two_words():
+    import re
+    pat = derive_always_pattern("git push origin main")
+    assert pat == r"^git\ push( |$)"
+    rx = re.compile(pat)
+    assert rx.search("git push")
+    assert rx.search("git push --force-with-lease origin main")
+    assert not rx.search("git pushx")
+    assert not rx.search("git pull")
+
+
+def test_always_pattern_single_word():
+    import re
+    rx = re.compile(derive_always_pattern("make"))
+    assert rx.search("make")
+    assert rx.search("make -j8 all")
+    assert not rx.search("makepkg")
+
+
+def test_always_pattern_flag_second_word_drops_to_one():
+    import re
+    rx = re.compile(derive_always_pattern("ls -la /tmp"))
+    assert rx.search("ls")
+    assert rx.search("ls -l")
+    assert not rx.search("lsof")
+
+
+def test_always_pattern_escapes_metacharacters():
+    import re
+    rx = re.compile(derive_always_pattern("a.b c*d whatever"))
+    assert rx.search("a.b c*d")
+    assert not rx.search("axb cxxd")
+
+
+def test_always_pattern_empty_matches_nothing_useful():
+    import re
+    rx = re.compile(derive_always_pattern("   "))
+    assert not rx.search("anything")
