@@ -430,18 +430,31 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
     g->printf("%.31s", tama.promptHint + 31);
   }
 
-  // Bottom row: swipe affordances + wait timer in the middle
+  // Bottom row: swipe affordances + timer in the middle. The bridge sends
+  // prompt.ttl (seconds until it gives up and falls back to the terminal);
+  // count down locally between heartbeats. Timer shows elapsed until the
+  // last minute, then flips to time-left in HOT. The 2px bar along the
+  // bottom edge drains toward the deadline the whole time.
   g->setTextColor(HOT, PANEL);
   g->setCursor(ox + 10, oy + CARD_H - 14);
   g->print("< deny");
   g->setTextColor(GREEN, PANEL);
   g->setCursor(ox + CARD_W - 10 - 9 * 6, oy + CARD_H - 14);
   g->print("approve >");
+  int remain = (int)tama.promptTtl - (int)((millis() - tama.promptTtlAtMs) / 1000);
+  if (remain < 0) remain = 0;
+  bool closing = tama.promptTtl && remain <= 60;
   uint32_t waited = (millis() - promptArrivedMs) / 1000;
-  char wb[8]; snprintf(wb, sizeof(wb), "%lus", (unsigned long)waited);
-  g->setTextColor(waited >= 10 ? HOT : p.textDim, PANEL);
+  char wb[12];
+  if (closing) snprintf(wb, sizeof(wb), "%ds left", remain);
+  else         snprintf(wb, sizeof(wb), "%lus", (unsigned long)waited);
+  g->setTextColor(closing ? HOT : p.textDim, PANEL);
   g->setCursor(ox + (CARD_W - (int)strlen(wb) * 6) / 2, oy + CARD_H - 14);
   g->print(wb);
+  if (tama.promptTtlMax) {
+    int bw = (CARD_W - 16) * remain / tama.promptTtlMax;
+    if (bw > 0) g->fillRect(ox + 8, oy + CARD_H - 5, bw, 2, closing ? HOT : p.textDim);
+  }
 
   // Stamp fades in past ~30% of the commit distance
   if (fabsf(r) > 0.3f) {
@@ -470,6 +483,24 @@ static void drawApproval() {
     spr.setCursor(4, H - 12);
     spr.print("sent...");
     return;
+  }
+
+  // Peeking deck: more prompts wait behind this card. Only the top edges
+  // show (the card covers the rest); the badge carries the exact count.
+  // Deliberately static while the card tilts/flies — swiping the top card
+  // away visually reveals the deck it came from.
+  uint8_t deck = tama.promptQueued > 2 ? 2 : tama.promptQueued;
+  for (int8_t i = deck; i >= 1; i--) {
+    int inset = 12 * i, lift = 5 * i;
+    int dx = CARD_CX - CARD_W / 2 + inset, dy = CARD_CY - CARD_H / 2 - lift;
+    spr.fillRoundRect(dx, dy, CARD_W - 2 * inset, CARD_H / 2, 8, PANEL);
+    spr.drawRoundRect(dx, dy, CARD_W - 2 * inset, CARD_H / 2, 8, p.textDim);
+  }
+  if (tama.promptQueued) {
+    spr.setTextSize(1);
+    spr.setTextColor(p.body, p.bg);
+    spr.setCursor(W - 26, CARD_BAND_Y + 5);
+    spr.printf("+%u", tama.promptQueued);
   }
 
   int16_t ang = (int16_t)(cardX * 0.075f);

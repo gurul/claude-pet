@@ -53,6 +53,41 @@ def test_heartbeat_with_pending():
     assert hb["prompt"]["id"] == "tid_1"
     assert hb["prompt"]["tool"] == "Bash"
     assert hb["prompt"]["hint"].startswith("rm -rf")
+    assert hb["prompt"]["queued"] == 0
+    # Freshly issued: ttl is within a second of the full window.
+    assert 298 <= hb["prompt"]["ttl"] <= 300
+
+
+def test_heartbeat_queued_counts_other_sessions():
+    s = State()
+    s.session_start("a")
+    s.session_start("b")
+    s.session_start("c")
+    s.permission_pending("a", "tid_a", "Bash", "git push")
+    s.permission_pending("b", "tid_b", "Bash", "rm -rf x")
+    s.permission_pending("c", "tid_c", "Read", "/etc/hosts")
+    hb = build_heartbeat(s)
+    # Oldest pending is the card; two more wait behind it.
+    assert hb["prompt"]["id"] == "tid_a"
+    assert hb["prompt"]["queued"] == 2
+
+
+def test_heartbeat_ttl_decreases_with_age():
+    s = State()
+    s.session_start("x")
+    p = s.permission_pending("x", "tid_1", "Bash", "git push")
+    p.issued_at -= 120  # pretend it has been waiting two minutes
+    hb = build_heartbeat(s)
+    assert 178 <= hb["prompt"]["ttl"] <= 180
+
+
+def test_heartbeat_ttl_clamps_at_zero():
+    s = State()
+    s.session_start("x")
+    p = s.permission_pending("x", "tid_1", "Bash", "git push")
+    p.issued_at -= 10_000
+    hb = build_heartbeat(s)
+    assert hb["prompt"]["ttl"] == 0
 
 
 def test_heartbeat_entries_formatted():

@@ -21,6 +21,7 @@ from .matchers import load_config as load_matcher_config
 from .protocol import (
     ENTRY_MAX_BYTES,
     HEARTBEAT_KEEPALIVE,
+    PERMISSION_WAIT_SECS,
     build_heartbeat,
     build_time_sync,
     truncate_utf8_bytes,
@@ -36,11 +37,9 @@ _ENTRY_PAYLOAD_MAX_BYTES = ENTRY_MAX_BYTES - 2
 
 log = logging.getLogger(__name__)
 
-# Hook timeout for a permission decision on the stick. REFERENCE.md says the
-# desktop app keeps the prompt up indefinitely, but hooks have a finite timeout.
-# Default hook timeout is 600s; we cap lower so that a forgotten decision falls
-# back to Claude Code's normal approval UI rather than freezing the session.
-PERMISSION_WAIT_SECS = 300.0
+# PERMISSION_WAIT_SECS moved to protocol.py — the wire `prompt.ttl` field is
+# derived from it, so it lives next to the serializer. Re-exported via the
+# import above for callers/tests that referenced it here.
 
 
 class Daemon:

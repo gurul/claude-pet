@@ -20,6 +20,10 @@ struct TamaState {
   char     promptTool[20];
   char     promptHint[44];
   char     promptSess[20];   // cwd basename of the asking session
+  uint8_t  promptQueued;     // prompts waiting behind this one (deck depth)
+  uint16_t promptTtl;        // seconds left at last heartbeat before terminal fallback
+  uint32_t promptTtlAtMs;    // millis() when promptTtl arrived (for local countdown)
+  uint16_t promptTtlMax;     // largest ttl seen for this prompt — drain-bar scale
 };
 
 // ---------------------------------------------------------------------------
@@ -117,13 +121,20 @@ static void _applyJson(const char* line, TamaState* out) {
   JsonObject pr = doc["prompt"];
   if (!pr.isNull()) {
     const char* pid = pr["id"]; const char* pt = pr["tool"]; const char* ph = pr["hint"];
+    bool fresh = strcmp(out->promptId, pid ? pid : "") != 0;
     strncpy(out->promptId,   pid ? pid : "", sizeof(out->promptId)-1);   out->promptId[sizeof(out->promptId)-1]=0;
     strncpy(out->promptTool, pt  ? pt  : "", sizeof(out->promptTool)-1); out->promptTool[sizeof(out->promptTool)-1]=0;
     strncpy(out->promptHint, ph  ? ph  : "", sizeof(out->promptHint)-1); out->promptHint[sizeof(out->promptHint)-1]=0;
     const char* ps = pr["sess"];
     strncpy(out->promptSess, ps ? ps : "", sizeof(out->promptSess)-1); out->promptSess[sizeof(out->promptSess)-1]=0;
+    out->promptQueued = pr["queued"] | 0;
+    uint16_t ttl = pr["ttl"] | 0;
+    out->promptTtl = ttl;
+    out->promptTtlAtMs = millis();
+    if (fresh || ttl > out->promptTtlMax) out->promptTtlMax = ttl;
   } else {
     out->promptId[0] = 0; out->promptTool[0] = 0; out->promptHint[0] = 0; out->promptSess[0] = 0;
+    out->promptQueued = 0; out->promptTtl = 0; out->promptTtlMax = 0;
   }
   out->lastUpdated = millis();
   _lastLiveMs = millis();

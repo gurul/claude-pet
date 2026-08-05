@@ -21,6 +21,11 @@ NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # peripheral → central (
 # How often we send a keepalive heartbeat if nothing else changed (seconds).
 HEARTBEAT_KEEPALIVE = 10.0
 
+# How long the daemon waits for a stick decision before falling back to
+# Claude Code's terminal prompt. Lives here (not daemon.py) because the wire
+# `prompt.ttl` field is derived from it, so protocol and policy stay in sync.
+PERMISSION_WAIT_SECS = 300.0
+
 # Size cap for turn events per REFERENCE.md (4KB after UTF-8 encoding).
 TURN_EVENT_MAX_BYTES = 4096
 
@@ -79,6 +84,12 @@ def build_heartbeat(state: State, msg: Optional[str] = None, codec: Optional[str
             # cwd basename: which session is asking. The full path stays
             # host-side; the card only needs the repo name.
             "sess": sanitize_for_stick(os.path.basename(pending.cwd or "") or "?", codec),
+            # How many MORE prompts wait behind this one — the card renders
+            # them as a peeking deck so a queue is visible at a glance.
+            "queued": max(0, state.pending_count - 1),
+            # Seconds until the daemon gives up and falls back to the
+            # terminal. The card counts down locally between heartbeats.
+            "ttl": max(0, int(PERMISSION_WAIT_SECS - (time.monotonic() - pending.issued_at))),
         }
     return snapshot
 

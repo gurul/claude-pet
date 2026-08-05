@@ -143,6 +143,12 @@ class State:
             return None
         return min(pendings, key=lambda p: p.issued_at)
 
+    @property
+    def pending_count(self) -> int:
+        """How many permissions are waiting across all sessions. The stick
+        shows the oldest as the card; the rest render as a deck behind it."""
+        return sum(1 for s in self.sessions.values() if s.pending is not None)
+
     # ---- needs-input (Notification hook) ----
 
     # Auto-expire so a notification for an abandoned session doesn't leave
