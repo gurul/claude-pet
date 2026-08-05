@@ -305,6 +305,15 @@ class Daemon:
         if evt not in ("pretooluse", "get_state"):
             log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
 
+        if evt == "species":
+            # Replaces the retired on-device menu. Firmware persists the index
+            # in NVS, so this survives reboots.
+            idx = int(req.get("idx") or 0)
+            if self.ble.connected:
+                await self.ble.send({"cmd": "species", "idx": idx})
+                log.info("species: set to index %d", idx)
+            return {"ok": True, "connected": self.ble.connected}
+
         if evt == "diag":
             # `cc-buddy-bridge diag`: ask the board for a fresh report, then
             # return the last one we hold. The board's reply arrives

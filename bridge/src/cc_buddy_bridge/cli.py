@@ -60,6 +60,17 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser("status", help="Show install status")
     p_status.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
 
+    p_species = sub.add_parser(
+        "species",
+        help="Set the pet's character (replaces the retired on-device menu)",
+    )
+    p_species.add_argument(
+        "name",
+        help="Species name (e.g. capybara, bongo, cat) or index; 'gif' selects "
+             "an installed GIF character pack",
+    )
+    p_species.add_argument("--socket", default=None, help="IPC path or host:port override")
+
     sub.add_parser(
         "voice-check",
         help="Diagnose hold-the-pet push-to-talk (Accessibility grant, signing, pyobjc)",
@@ -140,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         from .installer import show_status
         return show_status(config_dir=getattr(args, "config_dir", None))
+    if args.cmd == "species":
+        return _run_species(args.name, args.socket)
     if args.cmd == "diag":
         return _run_diag(args.socket, args.watch)
     if args.cmd == "voice-check":
@@ -281,6 +294,52 @@ def _render_diag(d: dict | None, connected: bool) -> None:
         except ValueError:
             stamp = ms
         print(f"  {stamp}  {text}")
+
+
+# Species table order, mirroring firmware src/buddy.cpp SPECIES_TABLE. The
+# saved index is positional, so this list must move with that one.
+SPECIES = [
+    "capybara", "duck", "goose", "blob", "cat", "dragon", "octopus", "owl",
+    "penguin", "turtle", "snail", "ghost", "axolotl", "cactus", "robot",
+    "rabbit", "mushroom", "chonk", "bongo",
+]
+
+
+def _run_species(name: str, socket_path: str | None) -> int:
+    """Set the pet's character over the serial link.
+
+    The on-device menu that used to do this is gone: customization belongs on
+    the host, where it is scriptable and does not suspend the pet's gestures.
+    """
+    from .hooks._client import post
+
+    key = name.strip().lower()
+    if key in ("gif", "character", "pack"):
+        idx = 0xFF          # firmware sentinel: use the installed GIF pack
+    elif key.isdigit():
+        idx = int(key)
+        if idx >= len(SPECIES):
+            print(f"index {idx} out of range (0..{len(SPECIES) - 1})", file=sys.stderr)
+            return 2
+    elif key in SPECIES:
+        idx = SPECIES.index(key)
+    else:
+        print(f"unknown species {name!r}\n\navailable: {', '.join(SPECIES)}\n"
+              "or 'gif' for an installed character pack", file=sys.stderr)
+        return 2
+
+    resp = post({"evt": "species", "idx": idx}, socket_path=socket_path, timeout=3.0)
+    if resp is None:
+        print("cc-buddy-bridge: daemon not reachable "
+              "(check `launchctl list | grep cc-buddy`).", file=sys.stderr)
+        return 2
+    if not resp.get("connected"):
+        print("board not connected — the change will not apply until it is.",
+              file=sys.stderr)
+        return 2
+    shown = "GIF pack" if idx == 0xFF else f"{SPECIES[idx]} (index {idx})"
+    print(f"species set to {shown}")
+    return 0
 
 
 def _run_diag(socket_path: str | None, watch: bool) -> int:

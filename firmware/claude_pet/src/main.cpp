@@ -1344,33 +1344,23 @@ void loop() {
     }
   }
 
+  // The on-device menu is retired. Everything it offered — species, settings,
+  // demo mode, factory reset — is host-side territory now, reachable from the
+  // CLI over the same serial link (see `cc-buddy-bridge species`). A 2.8"
+  // panel you poke with a fingertip is a bad settings UI, and every overlay
+  // it opened also suspended the gestures that are the point of the device.
+  //
+  // A long press on the strip therefore does nothing. The drawing code for
+  // menu/settings/reset is left compiled but unreachable; deleting it is a
+  // separate cleanup, and leaving it costs nothing at 19% flash.
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
-    beep(800, 60);
-    if (resetOpen) { resetOpen = false; }
-    else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
-    else {
-      menuOpen = !menuOpen;
-      menuSel = 0;
-      if (!menuOpen) characterInvalidate();
-    }
-    Serial.println(menuOpen ? "menu open" : "menu close");
   }
   if (M5.BtnA.wasReleased()) {
     if (!btnALong && !swallowBtnA) {
       if (tama.promptId[0]) {
         // swipe card owns decisions; a strip touch during a prompt is
         // just the tail of a card drag — swallow it
-      } else if (resetOpen) {
-        beep(1800, 30);
-        resetSel = (resetSel + 1) % RESET_N;
-        resetConfirmIdx = 0xFF;
-      } else if (settingsOpen) {
-        beep(1800, 30);
-        settingsSel = (settingsSel + 1) % SETTINGS_N;
-      } else if (menuOpen) {
-        beep(1800, 30);
-        menuSel = (menuSel + 1) % MENU_N;
       } else {
         beep(1800, 30);
         displayMode = (displayMode + 1) % DISP_COUNT;
