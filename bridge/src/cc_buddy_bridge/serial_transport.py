@@ -16,6 +16,7 @@ import asyncio
 import glob
 import json
 import logging
+import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -28,6 +29,14 @@ log = logging.getLogger(__name__)
 IncomingHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 RECONNECT_SECS = 3.0
+
+# Board output worth surfacing at WARNING: ESP-IDF error lines, panic dumps,
+# watchdog trips, and the ROM banner that means it just reset underneath us.
+_IS_CRASH = re.compile(
+    r"watchdog|Backtrace|Guru Meditation|abort\(\)|assert failed|"
+    r"StoreProhibited|LoadProhibited|rst:0x|E \(\d+\)|CORRUPT HEAP|stack overflow",
+    re.IGNORECASE,
+)
 
 # Treat the link as dead after this long with no bytes read at all.
 #
@@ -137,7 +146,16 @@ class BuddySerial:
                         text = line.decode("utf-8", errors="replace").strip()
                         if not text.startswith("{"):
                             if text:
-                                log.debug("stick: %s", text)  # boot/debug prints
+                                # Crash output must survive at the default log
+                                # level. A panic backtrace logged at DEBUG is
+                                # invisible exactly when it matters, and asking
+                                # someone to reproduce a freeze under a
+                                # hand-started DEBUG daemon is a bad trade.
+                                log.log(
+                                    logging.WARNING if _IS_CRASH.search(text)
+                                    else logging.DEBUG,
+                                    "stick: %s", text,
+                                )
                             continue
                         try:
                             obj = json.loads(text)
