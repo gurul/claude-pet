@@ -61,8 +61,16 @@ def _quartz_poster() -> Optional[Poster]:
             "does nothing (pip install pyobjc-framework-Quartz)")
         return None
 
+    # A real event source rather than None. Events created with a NULL source
+    # carry no keyboard state and some apps drop them; HIDSystemState makes the
+    # synthesized key look like it came from the actual keyboard.
+    try:
+        src = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateHIDSystemState)
+    except Exception:  # noqa: BLE001
+        src = None
+
     def post(keycode: int, down: bool, with_option: bool) -> None:
-        ev = Quartz.CGEventCreateKeyboardEvent(None, keycode, down)
+        ev = Quartz.CGEventCreateKeyboardEvent(src, keycode, down)
         if with_option:
             Quartz.CGEventSetFlags(ev, Quartz.kCGEventFlagMaskAlternate)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
@@ -233,6 +241,10 @@ class VoiceHold:
                 return False
             self._trust_check = None
         self._poster(key, True, False)
+        # Hold briefly. A down/up in the same microsecond is not a keypress any
+        # human could produce, and apps that debounce or sample input on a
+        # frame boundary drop it entirely.
+        time.sleep(0.03)
         self._poster(key, False, False)
         log.info("key: tapped %s", name)
         return True

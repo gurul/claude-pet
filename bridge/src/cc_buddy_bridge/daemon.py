@@ -82,6 +82,9 @@ class Daemon:
         # Most recent {"diag":{...}} the board sent; served over IPC so
         # `cc-buddy-bridge diag` can show it without owning the serial port.
         self._last_diag: Optional[dict[str, Any]] = None
+        # Status-ack liveness: proves host->board writes still land.
+        self._status_sent_at: Optional[float] = None
+        self._status_missed = 0
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -203,17 +206,37 @@ class Daemon:
                 await asyncio.sleep(1.0)
 
     async def _status_poller(self) -> None:
-        """Periodically ask the stick for its status so we track sec/battery.
-        Ack handling lives in _handle_ble (ack:"status" branch)."""
+        """Poll the stick for status, and use the replies as a TX health check.
+
+        The status ack is the only thing that proves host→board writes are
+        landing. A half-dead link — reads fine, writes silently go nowhere —
+        keeps RX_SILENCE_SECS happy (the board is still talking) while the board
+        shows "No Claude connected" because no heartbeat ever reaches it.
+        Missing acks are the only signal, so treat them as one.
+        """
         POLL_INTERVAL = 60.0
+        MISSED_LIMIT = 2          # ~2min of unanswered polls before reconnecting
         while not self._shutdown.is_set():
             try:
                 await asyncio.wait_for(self._shutdown.wait(), timeout=POLL_INTERVAL)
                 return
             except asyncio.TimeoutError:
                 pass
-            if self.ble.connected:
-                await self.ble.send({"cmd": "status"})
+            if not self.ble.connected:
+                continue
+            if self._status_sent_at is not None:
+                self._status_missed += 1
+                if self._status_missed >= MISSED_LIMIT:
+                    self._status_missed = 0
+                    self._status_sent_at = None
+                    force = getattr(self.ble, "force_reconnect", None)
+                    if force is not None:
+                        force(f"no status ack for {MISSED_LIMIT} polls "
+                              f"(~{int(MISSED_LIMIT * POLL_INTERVAL)}s) — "
+                              "writes are not reaching the board")
+                    continue
+            self._status_sent_at = time.monotonic()
+            await self.ble.send({"cmd": "status"})
 
     async def _voice_watchdog(self) -> None:
         """Force-release an overdue push-to-talk hold. The stop event can be
@@ -602,6 +625,10 @@ class Daemon:
         # Status acks come back from the device after we poll with {"cmd":"status"}.
         # Shape per REFERENCE.md: {"ack":"status","ok":true,"data":{"name","sec","bat":{...},"sys":{...},"stats":{...}}}.
         ack = obj.get("ack")
+        if ack == "status":
+            # Any status reply proves the write path works.
+            self._status_sent_at = None
+            self._status_missed = 0
         if ack == "status" and obj.get("ok"):
             data = obj.get("data") or {}
             sec = data.get("sec")

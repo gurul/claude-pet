@@ -178,6 +178,17 @@ class BuddySerial:
                 pass
             self._ser = None
 
+    def force_reconnect(self, why: str) -> None:
+        """Drop the handle so run() reopens the port.
+
+        For the half-dead link: writes silently go nowhere while reads keep
+        working, so RX_SILENCE_SECS never trips and the daemon looks healthy
+        while the board sits there showing "No Claude connected". Only the
+        absence of *replies* reveals it — see the daemon's status-ack watchdog.
+        """
+        log.warning("serial: forcing reconnect — %s", why)
+        self._teardown()
+
     async def stop(self) -> None:
         self._stop.set()
         self._teardown()

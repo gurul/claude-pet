@@ -182,8 +182,16 @@ void M5Compat::update() {
         _evTap = true;
     }
   } else if (!inPet) {
-    if (_holdActive) { _holdActive = false; _evHoldEnd = true; }  // slid out
-    _petTouch = false;
+    // Finger left the pet zone. A hold must NOT end here while the finger is
+    // still down: touch coordinates drift, and a single sample landing at
+    // y>=250 used to end a push-to-talk hold the instant it began — the board
+    // reported "hold released after 0.0s", so VoiceFlow keyed down and up with
+    // nothing between and recorded silence. Only a real release ends a hold.
+    if (_holdActive) {
+      if (!down) { _holdActive = false; _evHoldEnd = true; }
+    } else {
+      _petTouch = false;
+    }
   }
 }
 
