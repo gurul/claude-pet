@@ -321,7 +321,7 @@ def _render_diag(d: dict | None, connected: bool) -> None:
 SPECIES = [
     "capybara", "duck", "goose", "blob", "cat", "dragon", "octopus", "owl",
     "penguin", "turtle", "snail", "ghost", "axolotl", "cactus", "robot",
-    "rabbit", "mushroom", "chonk", "bongo",
+    "rabbit", "mushroom", "chonk",
 ]
 
 
