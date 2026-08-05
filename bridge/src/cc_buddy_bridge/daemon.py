@@ -89,6 +89,7 @@ class Daemon:
         self._status_sent_at: Optional[float] = None
         self._status_missed = 0
         self._ack_escalation = 0   # consecutive missed-ack episodes
+        self._clean_polls = 0      # answered polls since the last escalation
         # tool_use_id -> session cwd, for the card's swipe-up focus action.
         self._pending_cwds: dict[str, str] = {}
         # transcript_path → hash of the last assistant content we emitted as an
@@ -235,11 +236,18 @@ class Daemon:
                 if self._status_missed >= MISSED_LIMIT:
                     self._status_missed = 0
                     self._status_sent_at = None
-                    # Escalate: first a plain reconnect; if acks are STILL
-                    # missing a full cycle later, the wedge is board-side (its
-                    # RX died while TX kept going — observed twice, and only a
-                    # hardware reset cured it) and we pulse RTS to reboot it.
+                    # Escalate: first a plain reconnect (which now holds the
+                    # port closed for a while — the only host-side action that
+                    # ever revived this wedge); if acks are STILL missing a
+                    # cycle later, the wedge is board-side (its RX died while
+                    # TX kept going) and we pulse RTS to reboot it. The
+                    # escalation counter survives a lone post-reopen ack —
+                    # the field pattern is a flap, not a clean recovery — and
+                    # only a streak of clean polls (see the ack handler)
+                    # resets it.
                     self._ack_escalation += 1
+                    self._clean_polls = 0
+                    log.info("ack escalation → %d", self._ack_escalation)
                     why = (f"no status ack for {MISSED_LIMIT} polls "
                            f"(~{int(MISSED_LIMIT * POLL_INTERVAL)}s) — "
                            "writes are not reaching the board")
@@ -247,6 +255,7 @@ class Daemon:
                         pulse = getattr(self.ble, "pulse_reset", None)
                         if pulse is not None:
                             self._ack_escalation = 0
+                            self._clean_polls = 0
                             pulse("reconnect did not restore acks; " + why)
                             continue
                     force = getattr(self.ble, "force_reconnect", None)
@@ -622,6 +631,16 @@ class Daemon:
                 diag.get("boot"), reset, diag.get("up"),
                 diag.get("heap"), diag.get("minheap"), diag.get("psram"),
             )
+            # The single most valuable field after a watchdog reset: which
+            # loop() phase never returned. The firmware has always sent it;
+            # dropping it here is why a week of TASK-WATCHDOG resets never
+            # named the hanging call.
+            if "diedIn" in diag:
+                log.log(
+                    logging.WARNING if abnormal else logging.INFO,
+                    "  died in: %s (entered %sms, %s loops)",
+                    diag.get("diedIn"), diag.get("diedAtMs"), diag.get("loops"),
+                )
             for ev in diag.get("last") or []:
                 log.log(logging.WARNING if abnormal else logging.INFO,
                         "  pre-reset event: %s", ev)
@@ -694,10 +713,20 @@ class Daemon:
         # Shape per REFERENCE.md: {"ack":"status","ok":true,"data":{"name","sec","bat":{...},"sys":{...},"stats":{...}}}.
         ack = obj.get("ack")
         if ack == "status":
-            # Any status reply proves the write path works.
+            # A status reply proves the write path works RIGHT NOW — but the
+            # observed wedge pattern is flapping: a fresh reopen restores TX
+            # for one exchange (63-183s) and then goes deaf again. Zeroing the
+            # escalation on any single ack meant pulse_reset could never fire.
+            # Only a streak of clean poll cycles (counted in the poller)
+            # de-escalates; here we just mark the poll answered.
             self._status_sent_at = None
             self._status_missed = 0
-            self._ack_escalation = 0
+            self._clean_polls += 1
+            if self._ack_escalation and self._clean_polls >= 2:
+                log.info("status acks stable for %d clean polls — "
+                         "resetting ack escalation (was %d)",
+                         self._clean_polls, self._ack_escalation)
+                self._ack_escalation = 0
         if ack == "status" and obj.get("ok"):
             data = obj.get("data") or {}
             sec = data.get("sec")

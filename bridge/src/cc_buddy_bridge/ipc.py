@@ -290,4 +290,10 @@ class IPCServer:
     async def _reply(writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
         data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8", errors="replace")
         writer.write(data)
-        await writer.drain()
+        try:
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            # Hook clients enforce their own timeout and may hang up before
+            # reading the reply (seen during serial-reconnect storms). Their
+            # loss — must not become an unhandled client_connected_cb error.
+            log.debug("ipc: client hung up before reply was flushed")
