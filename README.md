@@ -1,6 +1,6 @@
 # Claude Pet 🐾
 
-![claude pet — esp32 desk pet for claude code](docs/assets/thumbnail.png)
+![the ASCII buddy on the board's screen — "a buddy appears", with the mini clock and live transcript HUD](docs/assets/thumbnail.png)
 
 A desk pet on an ESP32-S3 touchscreen that reacts to **Claude Code** in real time. It sleeps
 when you're idle, gets busy when Claude is working, and demands attention when Claude is
