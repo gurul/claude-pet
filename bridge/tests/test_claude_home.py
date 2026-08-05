@@ -29,13 +29,13 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_defaults_to_dot_claude() -> None:
     assert claude_config_dir() == Path.home() / ".claude"
-    assert settings_path() == Path.home() / ".claude" / "settings.json"
+    assert settings_path() == Path.home() / ".claude" / "settings.local.json"
 
 
 def test_env_config_dir_wins_over_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     assert claude_config_dir() == tmp_path
-    assert settings_path() == tmp_path / "settings.json"
+    assert settings_path() == tmp_path / "settings.local.json"
 
 
 def test_explicit_override_wins_over_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -86,3 +86,11 @@ def test_transcript_roots_appends_projects(monkeypatch: pytest.MonkeyPatch, tmp_
     a, b = tmp_path / "a", tmp_path / "b"
     monkeypatch.setenv(MULTI_ENV, f"{a}{os.pathsep}{b}")
     assert transcript_roots() == [a / "projects", b / "projects"]
+
+
+def test_hooks_never_target_the_wrapper_owned_file() -> None:
+    """Regression: era-code's Claude configurator declares "Era owns this
+    entirely" and rewrites settings.json wholesale on every sync, silently
+    deleting third-party hooks. Ours must live in the local file, which no
+    wrapper regenerates."""
+    assert settings_path().name == "settings.local.json"

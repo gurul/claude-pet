@@ -84,12 +84,19 @@ def _backup(path: Path) -> Path:
 
 def install_hooks(config_dir: str | None = None) -> int:
     path = settings_path(config_dir)
-    if not path.exists():
-        print(f"settings.json not found at {path}", file=sys.stderr)
+    # The config HOME must exist — that proves Claude Code actually uses it, and
+    # guards against a typo'd --config-dir silently creating a tree nothing
+    # reads. The local settings file itself is ours to create: it is the file
+    # wrappers do not own (see claude_home.settings_path) and often won't exist.
+    if not path.parent.is_dir():
+        print(f"Claude config home not found at {path.parent}", file=sys.stderr)
         return 2
-
-    backup = _backup(path)
-    print(f"backed up settings to {backup}")
+    if not path.exists():
+        path.write_text("{}\n", encoding="utf-8")
+        print(f"created {path}")
+    else:
+        backup = _backup(path)
+        print(f"backed up settings to {backup}")
 
     data = _load_settings(path)
     hooks = data.setdefault("hooks", {})
