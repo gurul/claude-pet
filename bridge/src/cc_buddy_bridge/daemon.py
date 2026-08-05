@@ -79,6 +79,9 @@ class Daemon:
         # stick's voice start/stop events. Lazily constructed on first use so
         # non-mac / Quartz-less hosts pay nothing.
         self._voice: Optional["VoiceHold"] = None
+        # Most recent {"diag":{...}} the board sent; served over IPC so
+        # `cc-buddy-bridge diag` can show it without owning the serial port.
+        self._last_diag: Optional[dict[str, Any]] = None
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -263,6 +266,16 @@ class Daemon:
         # hud polling — also too chatty to be useful here.
         if evt not in ("pretooluse", "get_state"):
             log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
+
+        if evt == "diag":
+            # `cc-buddy-bridge diag`: ask the board for a fresh report, then
+            # return the last one we hold. The board's reply arrives
+            # asynchronously over serial, so a request now shows up in the
+            # NEXT call — hence returning both.
+            if self.ble.connected:
+                await self.ble.send({"cmd": "diag"})
+            return {"ok": True, "connected": self.ble.connected,
+                    "diag": self._last_diag}
         if evt == "session_start":
             self.state.session_start(
                 req["session_id"],
@@ -521,6 +534,26 @@ class Daemon:
     # ---- BLE handler ----
 
     async def _handle_ble(self, obj: dict[str, Any]) -> None:
+        diag = obj.get("diag")
+        if isinstance(diag, dict):
+            # Crash/hang report from the board (see firmware diag.h). Logged at
+            # WARNING when the previous run died abnormally, because that line
+            # is the whole point: it says what the board was doing when it
+            # froze, which nothing else on this link can tell us.
+            reset = diag.get("reset", "?")
+            abnormal = reset in ("PANIC", "TASK-WATCHDOG", "INT-WATCHDOG",
+                                 "BROWNOUT", "other-watchdog")
+            self._last_diag = diag
+            log.log(
+                logging.WARNING if abnormal else logging.INFO,
+                "board diag: boot #%s after %s (up=%ss heap=%s min=%s psram=%s)",
+                diag.get("boot"), reset, diag.get("up"),
+                diag.get("heap"), diag.get("minheap"), diag.get("psram"),
+            )
+            for ev in diag.get("last") or []:
+                log.log(logging.WARNING if abnormal else logging.INFO,
+                        "  pre-reset event: %s", ev)
+            return
         cmd = obj.get("cmd")
         if cmd == "voice":
             # Hold-the-pet push-to-talk. start = finger settled on the pet,

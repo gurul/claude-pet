@@ -60,6 +60,19 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser("status", help="Show install status")
     p_status.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
 
+    sub.add_parser(
+        "voice-check",
+        help="Diagnose hold-the-pet push-to-talk (Accessibility grant, signing, pyobjc)",
+    )
+
+    p_diag = sub.add_parser(
+        "diag",
+        help="Ask the board why it last reset and what it was doing (crash/hang report)",
+    )
+    p_diag.add_argument("--socket", default=None, help="IPC path or host:port override")
+    p_diag.add_argument("--watch", action="store_true",
+                        help="Poll every 2s — leave running to catch the next freeze")
+
     p_hud = sub.add_parser(
         "hud",
         help="Print a one-line stick status summary (stdout; designed for Claude Code's statusLine)",
@@ -127,6 +140,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         from .installer import show_status
         return show_status(config_dir=getattr(args, "config_dir", None))
+    if args.cmd == "diag":
+        return _run_diag(args.socket, args.watch)
+    if args.cmd == "voice-check":
+        from .voice_trigger import VoiceHold
+        return VoiceHold().diagnose()
     if args.cmd == "hud":
         from .hud import run as hud_run
         return hud_run(ascii_only=args.ascii, socket_path=args.socket)
@@ -230,6 +248,72 @@ def _run_push_character(path: str) -> int:
     print(f"pushed '{name}': {files} files, {size:,} bytes")
     print("the stick has switched to the new character.")
     return 0
+
+
+def _render_diag(d: dict | None, connected: bool) -> None:
+    """Print a board diag report. Abnormal resets get the loud treatment —
+    that line is the answer to 'why did it freeze'."""
+    print(f"board connected: {connected}")
+    if not d:
+        print("no diag report yet — the board sends one at boot; if it just\n"
+              "reconnected, run this again in a couple of seconds.")
+        return
+    reset = d.get("reset", "?")
+    abnormal = reset in ("PANIC", "TASK-WATCHDOG", "INT-WATCHDOG", "BROWNOUT",
+                         "other-watchdog")
+    mark = "  <-- ABNORMAL" if abnormal else ""
+    print(f"boot #{d.get('boot')}   last reset: {reset}{mark}")
+    print(f"uptime {d.get('up')}s   heap {d.get('heap')} (min {d.get('minheap')})"
+          f"   psram {d.get('psram')}")
+    last = d.get("last") or []
+    if not last:
+        print("no surviving event ring (clean power-on, or first boot on this build)")
+        return
+    print("\nwhat it was doing before that reset (oldest first):")
+    for ev in last:
+        ms, _, text = str(ev).partition(":")
+        try:
+            stamp = f"{int(ms) / 1000:8.2f}s"
+        except ValueError:
+            stamp = ms
+        print(f"  {stamp}  {text}")
+
+
+def _run_diag(socket_path: str | None, watch: bool) -> int:
+    import time as _t
+
+    from .hooks._client import post
+
+    def ask() -> dict | None:
+        return post({"evt": "diag"}, socket_path=socket_path, timeout=3.0)
+
+    resp = ask()
+    if resp is None:
+        print("cc-buddy-bridge: daemon not reachable "
+              "(start it, or check `launchctl list | grep cc-buddy`).",
+              file=sys.stderr)
+        return 2
+    if not watch:
+        _render_diag(resp.get("diag"), bool(resp.get("connected")))
+        return 0
+
+    # Watch mode: the point is to be running WHEN it freezes, so the
+    # post-reset report is caught the moment the board comes back.
+    print("watching for board resets — Ctrl-C to stop\n")
+    seen: tuple | None = None
+    try:
+        while True:
+            resp = ask()
+            d = (resp or {}).get("diag")
+            key = ((d or {}).get("boot"), (d or {}).get("reset"))
+            if d and key != seen:
+                seen = key
+                print(f"--- {_t.strftime('%H:%M:%S')}")
+                _render_diag(d, bool((resp or {}).get("connected")))
+                print()
+            _t.sleep(2.0)
+    except KeyboardInterrupt:
+        return 0
 
 
 def _run_unpair() -> int:

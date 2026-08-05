@@ -64,15 +64,24 @@ def _quartz_poster() -> Optional[Poster]:
     return post
 
 
-def _check_accessibility() -> bool:
-    """True if this process may post events; prompts the user on first ask."""
+def _check_accessibility(prompt: bool = False) -> bool:
+    """True if this process may post events.
+
+    ``prompt`` shows the system "would like to control this computer" dialog —
+    pass it at most ONCE per daemon life. Prompting on every failed attempt
+    re-pops the dialog on every hold, which is indistinguishable from the grant
+    not working and trains the user to dismiss it.
+    """
     try:
         from ApplicationServices import (
+            AXIsProcessTrusted,
             AXIsProcessTrustedWithOptions,
             kAXTrustedCheckOptionPrompt,
         )
-        return bool(AXIsProcessTrustedWithOptions(
-            {kAXTrustedCheckOptionPrompt: True}))
+        if prompt:
+            return bool(AXIsProcessTrustedWithOptions(
+                {kAXTrustedCheckOptionPrompt: True}))
+        return bool(AXIsProcessTrusted())
     except ImportError:
         # Can't check — post anyway; if trust is missing the events are
         # silently dropped, and the log line below is the only breadcrumb.
@@ -99,6 +108,7 @@ class VoiceHold:
         self._trust_check = trust_check
         self._clock = clock
         self._held_since: Optional[float] = None
+        self._prompted = False   # the system dialog is shown at most once
 
     @property
     def active(self) -> bool:
@@ -110,11 +120,18 @@ class VoiceHold:
         if self.active:
             return True
         if self._trust_check is not None:
-            if not self._trust_check():
+            # Silent check every attempt; the modal dialog only the first time.
+            try:
+                ok = self._trust_check(prompt=not self._prompted)  # type: ignore[call-arg]
+            except TypeError:
+                ok = self._trust_check()   # injected checks take no kwargs
+            self._prompted = True
+            if not ok:
                 log.warning(
-                    "voice: Accessibility not granted — grant the daemon's "
-                    "python in System Settings > Privacy & Security > "
-                    "Accessibility, then hold the pet again")
+                    "voice: Accessibility not granted for %s — see "
+                    "`cc-buddy-bridge voice-check` for the exact binary to add "
+                    "in System Settings > Privacy & Security > Accessibility",
+                    sys.executable)
                 return False        # keep the check armed for the next hold
             self._trust_check = None  # verified once; stop re-checking
         self._poster(KEY_OPTION, True, False)
@@ -132,6 +149,56 @@ class VoiceHold:
         held = self._clock() - (self._held_since or self._clock())
         self._held_since = None
         log.info("voice: hold released after %.1fs (Opt+Space up)", held)
+
+    def diagnose(self) -> int:
+        """Print why push-to-talk is or isn't working. Returns an exit code.
+
+        Accessibility is granted per *binary*, and a venv's python is a symlink
+        — macOS resolves it, so the path that must appear (and be toggled ON)
+        in System Settings is the real interpreter, not the venv one.
+        """
+        import os
+        import subprocess
+
+        real = os.path.realpath(sys.executable)
+        print(f"daemon python (argv):  {sys.executable}")
+        print(f"resolved binary:       {real}")
+        if real != sys.executable:
+            print("  ^ ADD THIS ONE in System Settings — the venv path is a symlink")
+
+        sig = "unknown"
+        try:
+            out = subprocess.run(["codesign", "-dv", "--verbose=2", real],
+                                 capture_output=True, text=True, timeout=10)
+            blob = out.stderr or out.stdout
+            adhoc = "adhoc" in blob or "Signature=adhoc" in blob
+            sig = "ad-hoc / linker-signed" if adhoc else "signed"
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"code signature:        {sig}")
+        if sig.startswith("ad-hoc"):
+            print("  note: ad-hoc-signed interpreters (uv/pyenv builds) are the")
+            print("  usual cause of a grant that 'won't stick' — macOS keys the")
+            print("  grant to the signature. Remove every stale python entry in")
+            print("  the Accessibility list, then re-add the resolved path above.")
+
+        if self._poster is None:
+            print("quartz poster:         UNAVAILABLE (pyobjc not installed?)")
+            return 2
+        print("quartz poster:         ok")
+
+        trusted = _check_accessibility(prompt=False)
+        print(f"accessibility trusted: {trusted}")
+        if not trusted:
+            print("\nFIX: System Settings > Privacy & Security > Accessibility")
+            print("  1. remove any existing 'python3.12' rows (stale grants)")
+            print(f"  2. '+', then Cmd+Shift+G, paste: {real}")
+            print("  3. make sure its toggle is ON (adding alone does not enable it)")
+            print("  4. restart the daemon:")
+            print("     launchctl kickstart -k gui/$(id -u)/com.github.cc-buddy-bridge.daemon")
+            return 1
+        print("\nReady — hold the pet to dictate.")
+        return 0
 
     def overdue(self) -> bool:
         """True when a hold has exceeded MAX_HOLD_SECS — the stop event was

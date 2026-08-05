@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include "ble_bridge.h"
+#include "diag.h"
 #include <mbedtls/base64.h>
 #include <ArduinoJson.h>
 
@@ -77,6 +78,11 @@ const char* ownerName();
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
   if (!cmd) return false;
+
+  if (strcmp(cmd, "diag") == 0) {
+    diagReport("requested");
+    return true;
+  }
 
   if (strcmp(cmd, "name") == 0) {
     const char* n = doc["name"];

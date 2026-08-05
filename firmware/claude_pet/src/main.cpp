@@ -781,6 +781,7 @@ static void sendDecision(bool approve) {
   char cmd[96];
   snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"%s\"}",
            tama.promptId, approve ? "once" : "deny");
+  diagLog("decision %s", approve ? "approve" : "deny");
   sendCmd(cmd);
   responseSent = true;
   if (approve) {
@@ -1047,8 +1048,12 @@ void drawHUD() {
 }
 
 void setup() {
+  // FIRST: capture the reset reason and the pre-reset event ring before any
+  // init can crash. Everything after this point is diagnosable.
+  diagInit();
   M5.begin();
   delay(2000);                       // let the host attach before first prints
+  diagReport("boot");                // why the last run ended + what it was doing
   Serial.println("[boot] M5.begin done");
   M5.Lcd.setRotation(0);
   M5.Imu.Init();
@@ -1098,9 +1103,13 @@ void setup() {
   }
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+  diagLog("setup done buddy=%d", (int)buddyMode);
+  // Arm last: the splash delays above would trip it.
+  diagWatchdogBegin();
 }
 
 void loop() {
+  diagWatchdogFeed();   // a hang past DIAG_WDT_SECS now resets + reports
   M5.update();
   M5.Beep.update();
   t++;
@@ -1149,15 +1158,18 @@ void loop() {
     if (M5.petHoldStarted()) {
       wake();
       voiceHold = true;
+      diagLog("voice start");
       sendCmd("{\"cmd\":\"voice\",\"state\":\"start\"}");
       beep(1200, 30);
     }
     if (M5.petScrubbed() && (int32_t)(now - oneShotUntil) >= 0) {
       wake();
       triggerOneShot(P_DIZZY, 2000);
+      diagLog("gesture scrub");
       Serial.println("scrub: dizzy");
     } else if (M5.petTapped()) {
       wake();
+      diagLog("gesture tap");
       triggerOneShot(P_HEART, 2000);
       beep(1600, 40);
     }
@@ -1169,6 +1181,7 @@ void loop() {
   // means the bridge holds Opt+Space until its own watchdog fires.
   if (M5.petHoldEnded() && voiceHold) {
     voiceHold = false;
+    diagLog("voice stop");
     sendCmd("{\"cmd\":\"voice\",\"state\":\"stop\"}");
     beep(900, 30);
   }
@@ -1180,6 +1193,7 @@ void loop() {
     lastPromptId[sizeof(lastPromptId)-1] = 0;
     responseSent = false;
     if (tama.promptId[0]) {
+      diagLog("prompt %.20s", tama.promptTool);
       promptArrivedMs = millis();
       wake();
       beep(1200, 80);   // alert chirp
