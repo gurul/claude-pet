@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
+from .matchers import is_destructive
 from .state import State
 
 # Nordic UART Service UUIDs (standard)
@@ -91,6 +92,15 @@ def build_heartbeat(state: State, msg: Optional[str] = None, codec: Optional[str
             # terminal. The card counts down locally between heartbeats.
             "ttl": max(0, int(PERMISSION_WAIT_SECS - (time.monotonic() - pending.issued_at))),
         }
+        # Destructive/privileged Bash commands render hot: red border and a
+        # stiffer approve threshold on the stick.
+        if pending.tool_name == "Bash" and is_destructive(pending.hint):
+            snapshot["prompt"]["risk"] = "hot"
+        # When the 60-byte hint truncates the command, ship a longer detail
+        # tail — the card expands to full screen on tap to show it.
+        if len(pending.hint.encode("utf-8")) > 60:
+            snapshot["prompt"]["detail"] = sanitize_for_stick(
+                truncate_utf8_bytes(pending.hint, 180), codec)
     return snapshot
 
 

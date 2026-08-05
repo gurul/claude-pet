@@ -24,6 +24,8 @@ struct TamaState {
   uint16_t promptTtl;        // seconds left at last heartbeat before terminal fallback
   uint32_t promptTtlAtMs;    // millis() when promptTtl arrived (for local countdown)
   uint16_t promptTtlMax;     // largest ttl seen for this prompt — drain-bar scale
+  bool     promptHot;        // destructive command: hot border, stiffer approve
+  char     promptDetail[184];// long-command tail; empty = hint says it all
 };
 
 // ---------------------------------------------------------------------------
@@ -132,9 +134,15 @@ static void _applyJson(const char* line, TamaState* out) {
     out->promptTtl = ttl;
     out->promptTtlAtMs = millis();
     if (fresh || ttl > out->promptTtlMax) out->promptTtlMax = ttl;
+    const char* risk = pr["risk"];
+    out->promptHot = risk && strcmp(risk, "hot") == 0;
+    const char* pd = pr["detail"];
+    strncpy(out->promptDetail, pd ? pd : "", sizeof(out->promptDetail)-1);
+    out->promptDetail[sizeof(out->promptDetail)-1] = 0;
   } else {
     out->promptId[0] = 0; out->promptTool[0] = 0; out->promptHint[0] = 0; out->promptSess[0] = 0;
     out->promptQueued = 0; out->promptTtl = 0; out->promptTtlMax = 0;
+    out->promptHot = false; out->promptDetail[0] = 0;
   }
   out->lastUpdated = millis();
   _lastLiveMs = millis();

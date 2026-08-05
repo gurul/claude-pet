@@ -362,6 +362,8 @@ static TFT_eSprite cardSpr(&M5.Lcd);
 static float cardX = 0, cardVel = 0;
 static int   cardGrabX = 0;
 static int   cardGrabY = 0;   // for the swipe-up focus gesture
+static uint32_t cardGrabMs = 0;  // press start — distinguishes tap from drag
+static bool  cardExpanded = false;  // tap: full-screen detail view
 static bool  cardTouchPrev = false;
 static bool  cardArmed = false;        // past-threshold beep latch
 static uint32_t cardArmedAtMs = 0;     // when the approve threshold was crossed
@@ -371,10 +373,17 @@ const int    CARD_BAND_Y = 204;
 const int    CARD_CX = 120, CARD_CY = 262;
 const float  CARD_COMMIT = 60.0f;      // px of drag that commits a decision
 
-// Horizontal commit ratio for border/stamp. (An up-swipe approve existed
-// briefly and was removed at the owner's request — right is enough.)
+// Hot (destructive) prompts need ~1.7x the drag to approve — deny stays
+// cheap. Muscle memory should not flick away `rm -rf` like `git status`.
+static float cardApproveCommit() {
+  return tama.promptHot ? CARD_COMMIT * 1.7f : CARD_COMMIT;
+}
+
+// Horizontal commit ratio for border/stamp, direction-aware: the approve
+// side is scaled by the hot tier. (An up-swipe approve existed briefly and
+// was removed at the owner's request — right is enough.)
 static float cardRatio() {
-  float r = cardX / CARD_COMMIT;
+  float r = cardX / (cardX > 0 ? cardApproveCommit() : CARD_COMMIT);
   if (r > 1) r = 1; if (r < -1) r = -1;
   return r;
 }
@@ -404,7 +413,8 @@ static void sendDecision(const char* decision) {
 // directly when the card sprite failed to allocate (no tilt then).
 static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
   float r = cardRatio();
-  uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT : p.textDim;
+  uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT
+                : (tama.promptHot ? HOT : p.textDim);
   g->fillRoundRect(ox, oy, CARD_W, CARD_H, 8, PANEL);
   g->drawRoundRect(ox, oy, CARD_W, CARD_H, 8, edge);
   if (fabsf(r) >= 1.0f) g->drawRoundRect(ox + 1, oy + 1, CARD_W - 2, CARD_H - 2, 7, edge);
@@ -478,6 +488,60 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
   }
 }
 
+// Tap the card → full-screen detail: the whole command (prompt.detail from
+// the bridge, falling back to the hint), wrapped, with the same
+// swipe-to-decide still live. Tap again to collapse.
+static void drawCardDetail(const Palette& p) {
+  float r = cardRatio();
+  uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT
+                : (tama.promptHot ? HOT : p.textDim);
+  spr.fillSprite(p.bg);
+  spr.fillRoundRect(4, 30, W - 8, H - 40, 8, PANEL);
+  spr.drawRoundRect(4, 30, W - 8, H - 40, 8, edge);
+  spr.setTextColor(p.text, PANEL);
+  spr.setTextSize(2);
+  spr.setCursor(14, 40);
+  spr.printf("%.14s", tama.promptTool);
+  spr.setTextSize(1);
+  if (tama.promptSess[0]) {
+    int sw = (int)strlen(tama.promptSess) * 6;
+    spr.setTextColor(p.textDim, PANEL);
+    spr.setCursor(W - 14 - sw, 44);
+    spr.print(tama.promptSess);
+  }
+  const char* src = tama.promptDetail[0] ? tama.promptDetail : tama.promptHint;
+  static char rows[18][40];
+  uint8_t n = wrapInto(src, rows, 18, 36);
+  spr.setTextColor(p.text, PANEL);
+  int y = 64;
+  for (uint8_t i = 0; i < n; i++, y += 10) {
+    spr.setCursor(14, y);
+    spr.print(rows[i]);
+  }
+  spr.setTextColor(HOT, PANEL);
+  spr.setCursor(14, H - 24);
+  spr.print("< deny");
+  spr.setTextColor(GREEN, PANEL);
+  spr.setCursor(W - 14 - 9 * 6, H - 24);
+  spr.print("approve >");
+  spr.setTextColor(p.textDim, PANEL);
+  spr.setCursor((W - 12 * 6) / 2, H - 24);
+  spr.print("tap to close");
+  if (fabsf(r) > 0.3f) {
+    bool ok = r > 0;
+    const char* s = ok ? (cardAlways ? "ALWAYS" : "APPROVE") : "DENY";
+    uint16_t c = ok ? GREEN : HOT;
+    int tw = (int)strlen(s) * 12;
+    int sx = (W - tw) / 2, sy = H / 2 - 8;
+    spr.setTextSize(2);
+    spr.setTextColor(c, PANEL);
+    spr.setCursor(sx, sy);
+    spr.print(s);
+    spr.drawRoundRect(sx - 6, sy - 5, tw + 12, 26, 4, c);
+    spr.setTextSize(1);
+  }
+}
+
 static void drawApproval() {
   const Palette& p = characterPalette();
   spr.fillRect(0, CARD_BAND_Y, W, H - CARD_BAND_Y, p.bg);
@@ -490,6 +554,8 @@ static void drawApproval() {
     spr.print("sent...");
     return;
   }
+
+  if (cardExpanded) { drawCardDetail(p); return; }
 
   // Peeking deck: more prompts wait behind this card. Only the top edges
   // show (the card covers the rest); the badge carries the exact count.
@@ -756,6 +822,7 @@ void loop() {
       if (buddyMode) buddyInvalidate();
       cardPhase = CARD_REST;
       cardX = 0; cardVel = 0; cardArmed = false; cardAlways = false;
+      cardExpanded = false;
       if (!cardSpr.created()) cardSpr.createSprite(CARD_W, CARD_H);
     } else {
       // Prompt resolved — free the card sprite and repaint everything so
@@ -763,6 +830,7 @@ void loop() {
       if (cardSpr.created()) cardSpr.deleteSprite();
       cardPhase = CARD_REST;
       cardX = 0; cardVel = 0;
+      cardExpanded = false;
       repaintAll();
       if (buddyMode) buddyInvalidate();
     }
@@ -776,11 +844,15 @@ void loop() {
   if (tama.promptId[0]) {
     bool tdown = M5.touching();
     if (!responseSent) {
+      // Expanded detail view owns the whole screen, so drags start anywhere;
+      // the compact card only grabs touches inside its band.
       if ((cardPhase == CARD_REST || cardPhase == CARD_SNAP)
-          && tdown && !cardTouchPrev && M5.touchY() >= CARD_BAND_Y) {
+          && tdown && !cardTouchPrev
+          && (cardExpanded || M5.touchY() >= CARD_BAND_Y)) {
         cardPhase = CARD_DRAG;
         cardGrabX = M5.touchX() - (int)cardX;   // grab mid-snap without a jump
         cardGrabY = M5.touchY();
+        cardGrabMs = millis();
         cardVel = 0;
         wake();
       }
@@ -802,6 +874,18 @@ void loop() {
           cardAlways = alwaysNow;
           lastInteractMs = millis();
         } else {                               // release
+          int dyUp = cardGrabY - M5.touchY();
+          uint32_t pressMs = millis() - cardGrabMs;
+          // Tap (short, stationary) toggles the full-command detail view.
+          // Checked first so it can never be mistaken for a micro-drag.
+          if (pressMs < 350 && fabsf(cardX) < 8 && abs(dyUp) < 8) {
+            cardExpanded = !cardExpanded;
+            beep(1700, 20);
+            cardPhase = CARD_SNAP;
+            cardArmed = false;
+            cardAlways = false;
+            repaintAll();          // leaving the full-screen view needs a clean frame
+          } else
           // Swipe UP = "show me": raise that session's terminal on the Mac.
           // NOT a decision — the card snaps back and stays pending. Only
           // counts when the drag was clearly vertical, so a sloppy
@@ -810,7 +894,6 @@ void loop() {
           // band, so a 50px upward flick left almost no room and the gesture
           // kept failing in practice. 35px is still well clear of a jittery
           // tap, and the sideways gate keeps it distinct from approve/deny.
-          int dyUp = cardGrabY - M5.touchY();
           if (dyUp > 35 && fabsf(cardX) < CARD_COMMIT * 0.6f) {
             char fc[80];
             snprintf(fc, sizeof(fc), "{\"cmd\":\"focus\",\"id\":\"%s\"}", tama.promptId);
@@ -821,12 +904,18 @@ void loop() {
             cardArmed = false;
             cardAlways = false;
           } else {
-          bool commit = fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
+          // Direction-aware commit: hot prompts need the longer approve
+          // drag and a harder flick; deny is always the cheap 60px/10px.
+          float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
+          bool approve = m > 0;
+          float commitDist = approve ? cardApproveCommit() : CARD_COMMIT;
+          float flickGate  = (approve && tama.promptHot) ? 18.0f : 10.0f;
+          bool commit = fabsf(cardX) > commitDist || fabsf(cardVel) > flickGate;
           if (commit) {
-            float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
-            bool approve = m > 0;
             sendDecision(approve ? (cardAlways ? "always" : "once") : "deny");
             cardPhase = CARD_FLY;
+            cardExpanded = false;
+            repaintAll();
             float dir = approve ? 1.0f : -1.0f;
             cardVel = fmaxf(fabsf(cardVel), 16.0f) * dir;
           } else {

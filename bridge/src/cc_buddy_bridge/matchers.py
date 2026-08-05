@@ -235,6 +235,36 @@ def load_config(path: Path | None = None) -> MatcherConfig:
     )
 
 
+# The subset of always_ask that is outright destructive or privileged —
+# these render with a hot border and a stiffer approve on the stick, so
+# muscle memory can't flick away `rm -rf` as casually as `git push`.
+DEFAULT_DESTRUCTIVE: tuple[str, ...] = (
+    r"^sudo( |$)",
+    r"^su( |$)",
+    r"^rm( |$)",
+    r"^rmdir( |$)",
+    r"^dd( |$)",
+    r"^shred( |$)",
+    r"^mkfs\b",
+    r"^git reset --hard",
+    r"^git clean( |$)",
+    r"^git push\b.*( -f| --force)",
+    r"^git branch -D( |$)",
+    r"^git filter-(branch|repo)",
+    r"^find\b.*-delete\b",
+    r"^kill(all)?( |$)",
+    r"^pkill( |$)",
+)
+_DESTRUCTIVE_RX: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p) for p in DEFAULT_DESTRUCTIVE
+)
+
+
+def is_destructive(command: str) -> bool:
+    """Whether a command warrants the card's hot (harder-to-approve) tier."""
+    return bool(command) and any(rx.search(command) for rx in _DESTRUCTIVE_RX)
+
+
 def derive_always_pattern(command: str) -> str:
     """Pattern for a stick "always" grant: the command's first two words,
     the same shape as the built-in rules ("git push origin main" →

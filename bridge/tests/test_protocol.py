@@ -352,3 +352,48 @@ def test_build_heartbeat_no_codec_strips_cjk():
     snap = build_heartbeat(s, codec=None)
     assert "你好世界" not in snap["entries"][0]
     assert "?" in snap["entries"][0]
+
+
+def test_heartbeat_risk_hot_for_destructive_bash():
+    s = State()
+    s.session_start("x")
+    s.permission_pending("x", "tid_1", "Bash", "rm -rf /tmp/foo")
+    hb = build_heartbeat(s)
+    assert hb["prompt"]["risk"] == "hot"
+
+
+def test_heartbeat_no_risk_for_mundane_bash():
+    s = State()
+    s.session_start("x")
+    s.permission_pending("x", "tid_1", "Bash", "git push origin main")
+    hb = build_heartbeat(s)
+    assert "risk" not in hb["prompt"]
+
+
+def test_heartbeat_no_risk_for_read():
+    s = State()
+    s.session_start("x")
+    s.permission_pending("x", "tid_1", "Read", "rm -rf")  # path, not a command
+    hb = build_heartbeat(s)
+    assert "risk" not in hb["prompt"]
+
+
+def test_heartbeat_detail_only_when_hint_truncates():
+    s = State()
+    s.session_start("x")
+    s.permission_pending("x", "tid_1", "Bash", "short command")
+    hb = build_heartbeat(s)
+    assert "detail" not in hb["prompt"]
+
+
+def test_heartbeat_detail_carries_long_tail():
+    s = State()
+    s.session_start("x")
+    long_cmd = "python3 -m scripts.deploy --env production --confirm && echo done && rm -rf build/artifacts/staging"
+    s.permission_pending("x", "tid_1", "Bash", long_cmd)
+    hb = build_heartbeat(s)
+    assert len(hb["prompt"]["hint"].encode()) <= 60
+    detail = hb["prompt"]["detail"]
+    assert len(detail.encode()) <= 180
+    assert detail.startswith("python3 -m scripts.deploy")
+    assert "rm -rf build" in detail

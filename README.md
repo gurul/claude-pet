@@ -49,6 +49,7 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 |---|---|
 | **Swipe card right / left** | approve / deny the pending prompt |
 | **Hold card at the right edge** (700ms) | stamp flips to ALWAYS — approve and stop carding this command shape for the daemon's lifetime |
+| **Tap the card** | expand to a full-screen view of the whole command (long commands truncate on the card); tap again to close |
 | **Hold the pet** | push-to-talk: holds your dictation hotkey while held |
 | **Swipe down** (anywhere) | press Enter on the Mac |
 | **Swipe left / right** (no card up) | previous / next option in Claude Code's pickers (Up/Down arrow) |
