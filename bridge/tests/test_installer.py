@@ -1,8 +1,4 @@
-"""Installer tests — run against a temp settings.local.json, never the real one.
-
-Hooks live in settings.local.json because wrappers (era-code) own and rewrite
-settings.json wholesale; see claude_home.settings_path.
-"""
+"""Installer tests — run against a temp settings.json so we never touch the real one."""
 
 from __future__ import annotations
 
@@ -24,7 +20,7 @@ def temp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     tests exercise that resolution instead of bypassing it.
     """
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    return tmp_path / "settings.local.json"
+    return tmp_path / "settings.json"
 
 
 def _baseline(extra: dict | None = None) -> dict:

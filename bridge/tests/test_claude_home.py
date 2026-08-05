@@ -29,13 +29,13 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_defaults_to_dot_claude() -> None:
     assert claude_config_dir() == Path.home() / ".claude"
-    assert settings_path() == Path.home() / ".claude" / "settings.local.json"
+    assert settings_path() == Path.home() / ".claude" / "settings.json"
 
 
 def test_env_config_dir_wins_over_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     assert claude_config_dir() == tmp_path
-    assert settings_path() == tmp_path / "settings.local.json"
+    assert settings_path() == tmp_path / "settings.json"
 
 
 def test_explicit_override_wins_over_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -88,9 +88,14 @@ def test_transcript_roots_appends_projects(monkeypatch: pytest.MonkeyPatch, tmp_
     assert transcript_roots() == [a / "projects", b / "projects"]
 
 
-def test_hooks_never_target_the_wrapper_owned_file() -> None:
-    """Regression: era-code's Claude configurator declares "Era owns this
-    entirely" and rewrites settings.json wholesale on every sync, silently
-    deleting third-party hooks. Ours must live in the local file, which no
-    wrapper regenerates."""
-    assert settings_path().name == "settings.local.json"
+def test_hooks_target_the_file_claude_actually_reads() -> None:
+    """settings.json, measured not assumed.
+
+    settings.local.json looked safer (wrappers own settings.json), but an A/B
+    test settled it: hooks there alone never fired, and moving them to
+    settings.json worked immediately — Claude Code does not read the local file
+    from a $CLAUDE_CONFIG_DIR home. The era-code collision is fixed on
+    era-code's side (it now preserves third-party hooks) rather than by hiding
+    in a file nothing reads.
+    """
+    assert settings_path().name == "settings.json"

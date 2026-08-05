@@ -81,19 +81,19 @@ def daemon_config_dirs(override: str | None = None) -> list[Path]:
 
 
 def settings_path(override: str | None = None) -> Path:
-    """Where to install hooks.
+    """Where to install hooks: ``settings.json``.
 
-    ``settings.local.json``, not ``settings.json`` — deliberately. Claude Code
-    reads and merges both, but wrappers own the non-local file: era-code's
-    Claude configurator states "Era owns this entirely" and rewrites it wholesale
-    on every sync, so hooks installed there survive only until the next
-    `era-code` run and then vanish silently. That is not a hypothetical; it
-    wiped this bridge's hooks mid-session and the pet simply stopped prompting.
+    Measured, not assumed. ``settings.local.json`` looked like the safer home —
+    wrappers own settings.json and era-code rewrites it wholesale — but an A/B
+    test settled it: with hooks ONLY in settings.local.json no hook fired at
+    all, and adding them to settings.json made prompts work immediately. Claude
+    Code does not read the local file from a $CLAUDE_CONFIG_DIR home.
 
-    The local file is the documented home for machine-specific settings, which
-    is exactly what "this machine has a pet plugged into it" is.
+    So the collision with era-code has to be fixed on era-code's side (it now
+    preserves third-party hooks when regenerating this file) rather than by
+    hiding in a file nothing reads.
     """
-    return claude_config_dir(override) / "settings.local.json"
+    return claude_config_dir(override) / "settings.json"
 
 
 def transcript_roots(override: str | None = None) -> list[Path]:
