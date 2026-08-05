@@ -696,6 +696,21 @@ void loop() {
       sendCmd("{\"cmd\":\"key\",\"name\":\"enter\"}");
       beep(2000, 40);
     }
+    // Horizontal swipes walk Claude Code's option pickers: right = next
+    // option, left = previous. The daemon maps next/prev to Down/Up arrow
+    // keys, so swipe-swipe-swipe-down picks an option hands-on-pet.
+    if (M5.petSwipedRight()) {
+      wake();
+      diagLog("swipe right -> next");
+      sendCmd("{\"cmd\":\"key\",\"name\":\"next\"}");
+      beep(1600, 25);
+    }
+    if (M5.petSwipedLeft()) {
+      wake();
+      diagLog("swipe left -> prev");
+      sendCmd("{\"cmd\":\"key\",\"name\":\"prev\"}");
+      beep(1400, 25);
+    }
     // Tap-heart and scrub-dizzy are gone (owner request: touching the pet is
     // functional only — hold to dictate, swipe down for Enter; the pet's
     // moods come from Claude's state, not from being poked). The events are
@@ -705,6 +720,7 @@ void loop() {
   } else {
     // drain while overlays open, so a stale gesture can't fire later
     M5.petTapped(); M5.petScrubbed(); M5.petHoldStarted(); M5.petSwipedDown();
+    M5.petSwipedLeft(); M5.petSwipedRight();
   }
   // Stop is handled OUTSIDE the overlay gate: if a prompt or menu opens
   // mid-hold, the release must still end the dictation — a swallowed stop

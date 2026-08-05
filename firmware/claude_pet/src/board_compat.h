@@ -122,6 +122,11 @@ class M5Compat {
   // Downward swipe on the pet → Enter on the host. Fires mid-drag the moment
   // the threshold is crossed (not on release) so it feels immediate.
   bool petSwipedDown();
+  // Horizontal swipes → option navigation on the host (next/prev in Claude
+  // Code's pickers). Same mid-drag threshold model as swipe-down; the shared
+  // one-gesture-per-press latch means a swipe is down OR left OR right.
+  bool petSwipedLeft();
+  bool petSwipedRight();
 
  private:
   bool _touchDown = false;
@@ -141,7 +146,8 @@ class M5Compat {
   bool     _holdActive = false;
   bool     _evHoldStart = false, _evHoldEnd = false;
   bool     _evSwipeDown = false;
-  bool     _swipeFired = false;   // one Enter per press, not one per frame
+  bool     _evSwipeLeft = false, _evSwipeRight = false;
+  bool     _swipeFired = false;   // one gesture per press, not one per frame
   bool readTouch(int* x, int* y);
 };
 

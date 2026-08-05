@@ -184,6 +184,17 @@ void M5Compat::update() {
         M5.BtnA.cancel();
         M5.BtnB.cancel();
       }
+      // Horizontal swipe → option navigation. Mostly-horizontal by the same
+      // 2:1 ratio, slightly longer travel than swipe-down so a lazy diagonal
+      // Enter-swipe can't misread as navigation.
+      int dxTotS = _tx - _petDownX;
+      if (!_swipeFired && abs(dxTotS) > 50 && abs(dxTotS) > abs(dyTot) * 2) {
+        if (dxTotS > 0) _evSwipeRight = true; else _evSwipeLeft = true;
+        _swipeFired = true;
+        _reversals = 0;
+        M5.BtnA.cancel();
+        M5.BtnB.cancel();
+      }
       if (!_swipeFired) {
         int dx = _tx - _lastX;
         if (abs(dx) > 12) {
@@ -226,3 +237,5 @@ bool M5Compat::petScrubbed() { bool e = _evScrub; _evScrub = false; return e; }
 bool M5Compat::petHoldStarted() { bool e = _evHoldStart; _evHoldStart = false; return e; }
 bool M5Compat::petHoldEnded()   { bool e = _evHoldEnd;   _evHoldEnd = false;   return e; }
 bool M5Compat::petSwipedDown()  { bool e = _evSwipeDown; _evSwipeDown = false; return e; }
+bool M5Compat::petSwipedLeft()  { bool e = _evSwipeLeft; _evSwipeLeft = false; return e; }
+bool M5Compat::petSwipedRight() { bool e = _evSwipeRight; _evSwipeRight = false; return e; }

@@ -50,6 +50,7 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | **Swipe card right / left** | approve / deny the pending prompt |
 | **Hold the pet** | push-to-talk: holds your dictation hotkey while held |
 | **Swipe down** (anywhere) | press Enter on the Mac |
+| **Swipe left / right** (no card up) | previous / next option in Claude Code's pickers (Up/Down arrow) |
 | Tap bottom-right | scroll back through the transcript |
 
 There is no on-device menu, settings, or info screen — the pet is always the

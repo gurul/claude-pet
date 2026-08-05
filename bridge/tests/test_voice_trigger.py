@@ -131,6 +131,17 @@ def test_tap_refuses_unknown_key() -> None:
     assert p.events == []
 
 
+def test_tap_next_prev_map_to_arrows() -> None:
+    from cc_buddy_bridge.voice_trigger import KEY_DOWN_ARROW, KEY_UP_ARROW
+    v, p, _ = _hold()
+    assert v.tap("next")
+    assert v.tap("prev")
+    assert p.events == [
+        (KEY_DOWN_ARROW, True, 0), (KEY_DOWN_ARROW, False, 0),
+        (KEY_UP_ARROW, True, 0), (KEY_UP_ARROW, False, 0),
+    ]
+
+
 def test_tap_refused_during_voice_hold() -> None:
     """Opt is down mid-hold; a bare Return would become Opt+Return."""
     v, p, _ = _hold()

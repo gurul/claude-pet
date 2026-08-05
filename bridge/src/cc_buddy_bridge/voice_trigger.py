@@ -77,6 +77,8 @@ def _configured_hotkey() -> str:
     return name
 
 KEY_KEYPAD_ENTER = 76  # kVK_ANSI_KeypadEnter
+KEY_DOWN_ARROW = 125   # kVK_DownArrow
+KEY_UP_ARROW = 126     # kVK_UpArrow
 
 # Keys the board may ask us to tap. Deliberately a tiny allowlist: the board
 # is a peripheral on a serial line, and "synthesize any keystroke on request"
@@ -93,7 +95,14 @@ def _enter_keycode() -> int:
     return KEY_RETURN
 
 
-TAPPABLE = {"enter": _enter_keycode()}
+# "next"/"prev" come from horizontal swipes on the pet and navigate Claude
+# Code's option pickers, which are vertical lists — so they map to Down/Up
+# arrows. Kept semantic on the wire so the firmware never hardcodes keycodes.
+TAPPABLE = {
+    "enter": _enter_keycode(),
+    "next": KEY_DOWN_ARROW,
+    "prev": KEY_UP_ARROW,
+}
 
 # poster signature: (keycode, down, flags_mask, is_hold=True) -> None
 # is_hold selects the event source; see _quartz_poster.
