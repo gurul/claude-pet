@@ -53,7 +53,7 @@ def test_stop_releases_space_then_option() -> None:
     v, p, _ = _hold()
     v.start()
     v.stop()
-    assert p.events[2:] == [(KEY_SPACE, False, FLAG_ALTERNATE), (KEY_OPTION, False, 0)]
+    assert p.events[2:] == [(KEY_SPACE, False, 0), (KEY_OPTION, False, 0)]
     assert not v.active
 
 
@@ -86,7 +86,7 @@ def test_overdue_after_max_hold() -> None:
     assert v.overdue()
     v.stop()   # watchdog path: releases cleanly
     assert not v.overdue()
-    assert p.events[-2:] == [(KEY_SPACE, False, FLAG_ALTERNATE), (KEY_OPTION, False, 0)]
+    assert p.events[-2:] == [(KEY_SPACE, False, 0), (KEY_OPTION, False, 0)]
 
 
 def test_untrusted_never_posts_and_stays_armed() -> None:
@@ -153,7 +153,9 @@ def test_fn_hotkey_holds_the_function_key() -> None:
     # fn must carry the secondary-fn flag or listeners ignore it entirely.
     assert p.events == [(KEY_FUNCTION, True, FLAG_SECONDARY_FN)]
     v.stop()
-    assert p.events[-1] == (KEY_FUNCTION, False, FLAG_SECONDARY_FN)
+    # Release MUST clear flags: asserting fn on the key-up tells macOS the
+    # modifier is still held, and it sticks down system-wide.
+    assert p.events[-1] == (KEY_FUNCTION, False, 0)
 
 
 def test_fn_is_the_default() -> None:
@@ -171,3 +173,16 @@ def test_env_selects_opt_space(monkeypatch) -> None:
     monkeypatch.setenv("CC_BUDDY_VOICE_HOTKEY", "opt-space")
     v = VoiceHold(poster=FakePoster(), trust_check=None)
     assert v._hotkey == "opt-space"
+
+
+def test_release_always_clears_flags() -> None:
+    """Regression: a release that still asserts its modifier flag sticks the
+    key down for the whole system — observed with fn and Willow Voice."""
+    for name in ("fn", "opt-space"):
+        p = FakePoster()
+        v = VoiceHold(poster=p, hotkey=name, trust_check=None)
+        v.start()
+        v.stop()
+        releases = [e for e in p.events if e[1] is False]
+        assert releases, name
+        assert all(flags == 0 for _k, _d, flags in releases), (name, releases)

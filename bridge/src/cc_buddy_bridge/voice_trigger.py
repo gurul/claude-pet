@@ -194,8 +194,12 @@ class VoiceHold:
         if not self.active or self._poster is None:
             self._held_since = None
             return
-        for keycode, flags in reversed(self._chord):
-            self._poster(keycode, False, flags if keycode != KEY_OPTION else 0)
+        # Flags describe the modifier state AFTER the event, so a release must
+        # clear them. Sending fn-up while still asserting FLAG_SECONDARY_FN
+        # told macOS fn was *still held* — the key stuck down system-wide and
+        # dictation never stopped. Release always carries flags=0.
+        for keycode, _flags in reversed(self._chord):
+            self._poster(keycode, False, 0)
         held = self._clock() - (self._held_since or self._clock())
         self._held_since = None
         log.info("voice: hold released after %.1fs (%s up)", held, self._hotkey)
