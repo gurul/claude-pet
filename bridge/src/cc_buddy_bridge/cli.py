@@ -265,6 +265,10 @@ def _render_diag(d: dict | None, connected: bool) -> None:
     print(f"boot #{d.get('boot')}   last reset: {reset}{mark}")
     print(f"uptime {d.get('up')}s   heap {d.get('heap')} (min {d.get('minheap')})"
           f"   psram {d.get('psram')}")
+    if d.get("diedIn"):
+        # The single most useful line on a hang: the call that never returned.
+        print(f"\nDIED IN: {d['diedIn']}   (entered {d.get('diedAtMs')}ms, "
+              f"{d.get('loops')} loops)")
     last = d.get("last") or []
     if not last:
         print("no surviving event ring (clean power-on, or first boot on this build)")

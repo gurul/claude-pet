@@ -555,6 +555,13 @@ class Daemon:
                         "  pre-reset event: %s", ev)
             return
         cmd = obj.get("cmd")
+        if cmd == "key":
+            # Swipe-down on the pet → Enter on the host.
+            if self._voice is None:
+                from .voice_trigger import VoiceHold
+                self._voice = VoiceHold()
+            self._voice.tap(str(obj.get("name") or ""))
+            return
         if cmd == "voice":
             # Hold-the-pet push-to-talk. start = finger settled on the pet,
             # stop = release. The VoiceHold object is idempotent, and the

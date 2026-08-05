@@ -7,7 +7,13 @@ hold asserts the exact release sequence actually happened.
 
 from __future__ import annotations
 
-from cc_buddy_bridge.voice_trigger import KEY_OPTION, KEY_SPACE, MAX_HOLD_SECS, VoiceHold
+from cc_buddy_bridge.voice_trigger import (
+    KEY_OPTION,
+    KEY_RETURN,
+    KEY_SPACE,
+    MAX_HOLD_SECS,
+    VoiceHold,
+)
 
 
 class FakePoster:
@@ -103,3 +109,33 @@ def test_no_poster_is_a_clean_noop() -> None:
     assert not v.start()
     v.stop()
     assert not v.active
+
+
+# ---- tap (swipe-down → Enter) ----
+
+def test_tap_enter_presses_and_releases() -> None:
+    v, p, _ = _hold()
+    assert v.tap("enter")
+    assert p.events == [(KEY_RETURN, True, False), (KEY_RETURN, False, False)]
+
+
+def test_tap_refuses_unknown_key() -> None:
+    v, p, _ = _hold()
+    assert not v.tap("rm-rf")
+    assert p.events == []
+
+
+def test_tap_refused_during_voice_hold() -> None:
+    """Opt is down mid-hold; a bare Return would become Opt+Return."""
+    v, p, _ = _hold()
+    v.start()
+    before = len(p.events)
+    assert not v.tap("enter")
+    assert len(p.events) == before
+
+
+def test_tap_untrusted_posts_nothing() -> None:
+    p = FakePoster()
+    v = VoiceHold(poster=p, trust_check=lambda: False)
+    assert not v.tap("enter")
+    assert p.events == []

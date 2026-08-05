@@ -37,12 +37,42 @@
 // hunting hard hangs, not jitter.
 #define DIAG_WDT_SECS 15
 
+// Loop phases. The ring says WHAT the board was doing; the phase says WHERE
+// in the loop it stopped — one byte store per stage, cheap enough to run at
+// frame rate, which the formatted ring is not. On a hang the last phase
+// written is the call that never returned.
+enum DiagPhase : uint8_t {
+  DP_NONE = 0, DP_SETUP, DP_TOUCH, DP_DATA, DP_STATS, DP_LED, DP_GESTURE,
+  DP_PROMPT, DP_RENDER, DP_CLOCK, DP_MENU, DP_SERIAL, DP_IDLE,
+};
+
+inline const char* diagPhaseName(uint8_t p) {
+  switch (p) {
+    case DP_SETUP:   return "setup";
+    case DP_TOUCH:   return "touch/I2C (M5.update)";
+    case DP_DATA:    return "serial parse (dataPoll)";
+    case DP_STATS:   return "stats";
+    case DP_LED:     return "LED (rgbLedWrite/RMT)";
+    case DP_GESTURE: return "gesture handling";
+    case DP_PROMPT:  return "prompt/card";
+    case DP_RENDER:  return "render (buddy/sprite push)";
+    case DP_CLOCK:   return "clock face";
+    case DP_MENU:    return "menu/overlay";
+    case DP_SERIAL:  return "serial write";
+    case DP_IDLE:    return "loop end";
+    default:         return "none";
+  }
+}
+
 struct DiagRing {
   uint32_t magic;
   uint16_t bootCount;
   uint8_t  head;         // next write slot
   uint8_t  count;        // entries used (<= DIAG_SLOTS)
   uint32_t lastUptimeMs; // uptime at the most recent event
+  uint8_t  phase;        // DiagPhase — where the loop was
+  uint32_t phaseMs;      // when that phase was entered
+  uint32_t loops;        // loop iterations this boot
   char     ev[DIAG_SLOTS][DIAG_TEXT];
   uint32_t evMs[DIAG_SLOTS];
 };
@@ -69,6 +99,31 @@ inline const char* diagResetName(esp_reset_reason_t r) {
   }
 }
 
+// One store, no formatting — safe to call several times per frame.
+// Also measures how long the PREVIOUS phase took, so the slow-loop detector
+// can name the stage that ate the time rather than just the total.
+static uint8_t  _diagPrevPhase = DP_NONE;
+static uint32_t _diagPhaseStart = 0;
+static uint8_t  _diagWorstPhase = DP_NONE;
+static uint32_t _diagWorstMs = 0;
+
+inline void diagPhase(uint8_t p) {
+  uint32_t now = millis();
+  uint32_t spent = now - _diagPhaseStart;
+  if (spent > _diagWorstMs) { _diagWorstMs = spent; _diagWorstPhase = _diagPrevPhase; }
+  _diagPrevPhase = p;
+  _diagPhaseStart = now;
+  _diagRing.phase = p;
+  _diagRing.phaseMs = now;
+}
+
+// Call once per loop with the iteration's total time. A loop that suddenly
+// takes hundreds of ms is the pathology; catching it BEFORE the watchdog
+// fires is what turns "it froze" into "this stage got slow, then it froze".
+inline void diagLoopEnd(uint32_t loopMs);
+
+inline void diagLoopTick() { _diagRing.loops++; }
+
 inline void diagLog(const char* fmt, ...) {
   DiagRing& d = _diagRing;
   va_list ap;
@@ -79,6 +134,16 @@ inline void diagLog(const char* fmt, ...) {
   d.lastUptimeMs = d.evMs[d.head];
   d.head = (d.head + 1) % DIAG_SLOTS;
   if (d.count < DIAG_SLOTS) d.count++;
+}
+
+inline void diagLoopEnd(uint32_t loopMs) {
+  // Only the notable ones — a healthy loop is ~16ms and would flood the ring.
+  if (loopMs >= 250) {
+    diagLog("SLOW loop %lums @%s", (unsigned long)loopMs,
+            diagPhaseName(_diagWorstPhase));
+  }
+  _diagWorstMs = 0;
+  _diagWorstPhase = DP_NONE;
 }
 
 // Call FIRST in setup(), before anything that might crash.
@@ -126,6 +191,13 @@ inline void diagReport(const char* why) {
                 (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMinFreeHeap(), (unsigned)ESP.getFreePsram(),
                 _diagPrevValid ? "true" : "false");
+  // The single most useful field on a hang: which call never returned.
+  if (_diagPrevValid) {
+    Serial.printf(",\"diedIn\":\"%s\",\"diedAtMs\":%lu,\"loops\":%lu",
+                  diagPhaseName(_diagPrev.phase),
+                  (unsigned long)_diagPrev.phaseMs,
+                  (unsigned long)_diagPrev.loops);
+  }
   // Events from the boot that died, oldest first — the actual answer to
   // "what was it doing when it froze".
   if (_diagPrevValid) {
@@ -145,6 +217,10 @@ inline void diagReport(const char* why) {
                 (unsigned long)(millis() / 1000),
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
   if (_diagPrevValid) {
+    Serial.printf("[diag] DIED IN: %s (entered at %lums, %lu loops)\n",
+                  diagPhaseName(_diagPrev.phase),
+                  (unsigned long)_diagPrev.phaseMs,
+                  (unsigned long)_diagPrev.loops);
     Serial.printf("[diag] previous boot ran %lums and logged %u events:\n",
                   (unsigned long)_diagPrev.lastUptimeMs, _diagPrev.count);
     uint8_t start = (_diagPrev.head + DIAG_SLOTS - _diagPrev.count) % DIAG_SLOTS;

@@ -37,7 +37,13 @@ log = logging.getLogger(__name__)
 
 KEY_SPACE = 49   # kVK_Space
 KEY_OPTION = 58  # kVK_Option
+KEY_RETURN = 36  # kVK_Return
 MAX_HOLD_SECS = 60.0
+
+# Keys the board may ask us to tap. Deliberately a tiny allowlist: the board
+# is a peripheral on a serial line, and "synthesize any keystroke on request"
+# is a much larger surface than this feature needs.
+TAPPABLE = {"enter": KEY_RETURN}
 
 # poster signature: (keycode, down, with_option_flag) -> None
 Poster = Callable[[int, bool, bool], None]
@@ -199,6 +205,37 @@ class VoiceHold:
             return 1
         print("\nReady — hold the pet to dictate.")
         return 0
+
+    def tap(self, name: str) -> bool:
+        """Press and release one allowlisted key (swipe-down → Enter).
+
+        Refused while a push-to-talk hold is active: injecting Return with
+        Option still down would send Opt+Return, which is a different chord in
+        most apps.
+        """
+        key = TAPPABLE.get(name)
+        if key is None:
+            log.warning("key: refusing unknown key %r", name)
+            return False
+        if self._poster is None:
+            return False
+        if self.active:
+            log.warning("key: ignoring %r while a voice hold is active", name)
+            return False
+        if self._trust_check is not None:
+            try:
+                ok = self._trust_check(prompt=not self._prompted)  # type: ignore[call-arg]
+            except TypeError:
+                ok = self._trust_check()
+            self._prompted = True
+            if not ok:
+                log.warning("key: Accessibility not granted — see `voice-check`")
+                return False
+            self._trust_check = None
+        self._poster(key, True, False)
+        self._poster(key, False, False)
+        log.info("key: tapped %s", name)
+        return True
 
     def overdue(self) -> bool:
         """True when a hold has exceeded MAX_HOLD_SECS — the stop event was

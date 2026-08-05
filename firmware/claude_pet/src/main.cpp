@@ -1110,6 +1110,11 @@ void setup() {
 
 void loop() {
   diagWatchdogFeed();   // a hang past DIAG_WDT_SECS now resets + reports
+  static uint32_t _loopStart = 0;
+  if (_loopStart) diagLoopEnd(millis() - _loopStart);
+  _loopStart = millis();
+  diagLoopTick();
+  diagPhase(DP_TOUCH);
   M5.update();
   M5.Beep.update();
   t++;
@@ -1121,7 +1126,9 @@ void loop() {
                   now / 1000, ESP.getFreeHeap(), stateNames[activeState]);
   }
 
+  diagPhase(DP_DATA);
   dataPoll(&tama);
+  diagPhase(DP_STATS);
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 
@@ -1131,6 +1138,7 @@ void loop() {
 
   if ((int32_t)(now - oneShotUntil) >= 0) activeState = baseState;
 
+  diagPhase(DP_LED);
   // WS2812: pulse orange on attention, pink on heart, green on celebrate.
   // Solid blue overrides everything while a push-to-talk hold is active —
   // it is the "mic is live" indicator.
@@ -1147,6 +1155,7 @@ void loop() {
     ledSet(0, 0, 0);
   }
 
+  diagPhase(DP_GESTURE);
   // touch gestures on the pet: tap = pet it (heart), scrub = dizzy,
   // press-and-hold = push-to-talk (the bridge holds Opt+Space for
   // VoiceFlow while the finger is down).
@@ -1162,6 +1171,12 @@ void loop() {
       sendCmd("{\"cmd\":\"voice\",\"state\":\"start\"}");
       beep(1200, 30);
     }
+    if (M5.petSwipedDown()) {
+      wake();
+      diagLog("swipe down -> enter");
+      sendCmd("{\"cmd\":\"key\",\"name\":\"enter\"}");
+      beep(2000, 40);
+    }
     if (M5.petScrubbed() && (int32_t)(now - oneShotUntil) >= 0) {
       wake();
       triggerOneShot(P_DIZZY, 2000);
@@ -1174,7 +1189,8 @@ void loop() {
       beep(1600, 40);
     }
   } else {
-    M5.petTapped(); M5.petScrubbed(); M5.petHoldStarted();  // drain while overlays open
+    // drain while overlays open, so a stale gesture can't fire later
+    M5.petTapped(); M5.petScrubbed(); M5.petHoldStarted(); M5.petSwipedDown();
   }
   // Stop is handled OUTSIDE the overlay gate: if a prompt or menu opens
   // mid-hold, the release must still end the dictation — a swallowed stop
@@ -1187,6 +1203,7 @@ void loop() {
   }
 
   // BtnA: step through fake scenarios
+  diagPhase(DP_PROMPT);
   // Prompt arrival: beep, reset response flag
   if (strcmp(tama.promptId, lastPromptId) != 0) {
     strncpy(lastPromptId, tama.promptId, sizeof(lastPromptId)-1);
@@ -1379,6 +1396,7 @@ void loop() {
   // overlays, no prompt, no live Claude data, and the RTC has been set
   // by the bridge. Pet sleeps underneath. Exit restores Y via
   // applyDisplayMode() so the next mode-switch isn't visually offset.
+  diagPhase(DP_CLOCK);
   clockRefreshRtc();   // 1Hz internal throttle; also caches _onUsb
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
@@ -1424,6 +1442,7 @@ void loop() {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
+    diagPhase(DP_RENDER);
     buddyTick(activeState);
   } else if (characterLoaded()) {
     characterSetState(activeState);
@@ -1496,5 +1515,6 @@ void loop() {
     screenOff = true;
   }
 
+  diagPhase(DP_IDLE);   // reached the end cleanly — a hang here is the delay
   delay(screenOff ? 100 : 16);
 }

@@ -115,10 +115,17 @@ class M5Compat {
   bool petHoldStarted();
   bool petHoldEnded();
   bool petHeldNow() const { return _holdActive; }
+  // Downward swipe on the pet → Enter on the host. Fires mid-drag the moment
+  // the threshold is crossed (not on release) so it feels immediate.
+  bool petSwipedDown();
 
  private:
   bool _touchDown = false;
   int  _tx = 0, _ty = 0;
+  // Release debounce: consecutive empty polls required before believing the
+  // finger is gone. A single dropped read used to fire a spurious tap.
+  static const uint8_t TOUCH_UP_POLLS = 3;
+  uint8_t _upPolls = 0;
   // gesture tracking
   bool     _petTouch = false;
   uint32_t _petDownMs = 0;
@@ -129,6 +136,8 @@ class M5Compat {
   bool     _evTap = false, _evScrub = false;
   bool     _holdActive = false;
   bool     _evHoldStart = false, _evHoldEnd = false;
+  bool     _evSwipeDown = false;
+  bool     _swipeFired = false;   // one Enter per press, not one per frame
   bool readTouch(int* x, int* y);
 };
 

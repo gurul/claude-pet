@@ -103,8 +103,24 @@ void M5Compat::begin() {
 void M5Compat::update() {
   uint32_t now = millis();
   int x, y;
-  bool down = readTouch(&x, &y);
-  if (down) { _tx = x; _ty = y; }
+  bool raw = readTouch(&x, &y);
+
+  // Debounce the RELEASE edge only. readTouch() returns false for a momentary
+  // TD_STATUS==0 or any I2C hiccup mid-press, which used to read as a release:
+  // that fired a tap, then the next poll saw the finger again and started a
+  // fresh press. One finger produced a storm of ~6 taps/second (observed in
+  // the diag ring: 15 taps at exactly ~175ms apart). Requiring consecutive
+  // empty polls before believing a release costs one frame of latency and
+  // makes a single press produce a single tap.
+  if (raw) {
+    _upPolls = 0;
+  } else if (_touchDown && _upPolls < TOUCH_UP_POLLS) {
+    _upPolls++;
+    raw = true;              // still held as far as the gesture layer knows
+  }
+
+  bool down = raw;
+  if (down && (_upPolls == 0)) { _tx = x; _ty = y; }   // keep last good coords
   _touchDown = down;
 
   bool inStrip = down && _ty >= 250;
@@ -115,7 +131,7 @@ void M5Compat::update() {
   if (inPet && !_petTouch) {              // touch-down in pet area
     _petTouch = true;
     _petDownMs = now; _petDownX = _tx; _petDownY = _ty;
-    _lastX = _tx; _dir = 0; _reversals = 0;
+    _lastX = _tx; _dir = 0; _reversals = 0; _swipeFired = false;
   } else if (inPet && _petTouch) {        // drag: watch for direction flips
     // A steady 600ms press becomes a hold (push-to-talk); once a hold is
     // active, scrub detection is off — finger wobble mid-dictation must
@@ -126,21 +142,34 @@ void M5Compat::update() {
       _evHoldStart = true;
     }
     if (!_holdActive) {
-      int dx = _tx - _lastX;
-      if (abs(dx) > 12) {
-        int8_t d = dx > 0 ? 1 : -1;
-        if (_dir != 0 && d != _dir) _reversals++;
-        _dir = d;
-        _lastX = _tx;
+      // Downward swipe → Enter. Checked before scrub so a deliberate vertical
+      // drag can't accumulate reversals and read as a scrub instead. Requires
+      // the motion to be mostly vertical, so a diagonal flick during a scrub
+      // doesn't fire it.
+      int dyTot = _ty - _petDownY;
+      int dxTot = abs(_tx - _petDownX);
+      if (!_swipeFired && dyTot > 55 && dyTot > dxTot * 2) {
+        _evSwipeDown = true;
+        _swipeFired = true;      // latch: one Enter per press
+        _reversals = 0;          // and it is definitively not a scrub
       }
-      if (_reversals >= 3) { _evScrub = true; _petTouch = false; }
+      if (!_swipeFired) {
+        int dx = _tx - _lastX;
+        if (abs(dx) > 12) {
+          int8_t d = dx > 0 ? 1 : -1;
+          if (_dir != 0 && d != _dir) _reversals++;
+          _dir = d;
+          _lastX = _tx;
+        }
+        if (_reversals >= 3) { _evScrub = true; _petTouch = false; }
+      }
     }
   } else if (!down && _petTouch) {        // release
     _petTouch = false;
     if (_holdActive) {
       _holdActive = false;
       _evHoldEnd = true;                  // hold consumed the press: no tap
-    } else {
+    } else if (!_swipeFired) {
       uint32_t held = now - _petDownMs;
       if (held < 450 && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20)
         _evTap = true;
@@ -155,3 +184,4 @@ bool M5Compat::petTapped()   { bool e = _evTap;   _evTap = false;   return e; }
 bool M5Compat::petScrubbed() { bool e = _evScrub; _evScrub = false; return e; }
 bool M5Compat::petHoldStarted() { bool e = _evHoldStart; _evHoldStart = false; return e; }
 bool M5Compat::petHoldEnded()   { bool e = _evHoldEnd;   _evHoldEnd = false;   return e; }
+bool M5Compat::petSwipedDown()  { bool e = _evSwipeDown; _evSwipeDown = false; return e; }
