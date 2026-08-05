@@ -90,6 +90,12 @@ bool M5Compat::readTouch(int* x, int* y) {
 }
 
 void M5Compat::begin() {
+  // Enlarge the HWCDC RX ring before begin(). The default is small, and the
+  // bridge's heartbeats (json + transcript entries, up to ~ENTRY budget x 8)
+  // arrive as one burst at USB speed — the leading suspect for the recurring
+  // one-way wedge where the board keeps sending but stops receiving until a
+  // hardware reset. Must be called before begin() to take effect.
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);   // USB CDC — M5.begin() used to do this
   // Touch controller reset before Wire so first poll sees a live chip
   pinMode(PIN_TOUCH_RST, OUTPUT);

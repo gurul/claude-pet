@@ -178,6 +178,27 @@ class BuddySerial:
                 pass
             self._ser = None
 
+    def pulse_reset(self, why: str) -> None:
+        """Hardware-reset the board via the RTS line, then reconnect.
+
+        The escalation for a board-side USB wedge: the S3 keeps transmitting
+        but stops receiving, and reopening the host port does nothing because
+        the dead half is in the chip. Observed twice; both times only a reset
+        cured it. The pet reboots (~5s, diag ring reports the reset as
+        external-pin) — a short outage against an indefinitely deaf board.
+        """
+        ser = self._ser
+        log.warning("serial: RTS-resetting the board — %s", why)
+        if ser is not None:
+            try:
+                ser.dtr = False
+                ser.rts = True
+                time.sleep(0.1)
+                ser.rts = False
+            except Exception as e:  # noqa: BLE001
+                log.warning("serial: RTS pulse failed: %s", e)
+        self._teardown()
+
     def force_reconnect(self, why: str) -> None:
         """Drop the handle so run() reopens the port.
 

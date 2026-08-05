@@ -85,6 +85,7 @@ class Daemon:
         # Status-ack liveness: proves host->board writes still land.
         self._status_sent_at: Optional[float] = None
         self._status_missed = 0
+        self._ack_escalation = 0   # consecutive missed-ack episodes
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -229,11 +230,23 @@ class Daemon:
                 if self._status_missed >= MISSED_LIMIT:
                     self._status_missed = 0
                     self._status_sent_at = None
+                    # Escalate: first a plain reconnect; if acks are STILL
+                    # missing a full cycle later, the wedge is board-side (its
+                    # RX died while TX kept going — observed twice, and only a
+                    # hardware reset cured it) and we pulse RTS to reboot it.
+                    self._ack_escalation += 1
+                    why = (f"no status ack for {MISSED_LIMIT} polls "
+                           f"(~{int(MISSED_LIMIT * POLL_INTERVAL)}s) — "
+                           "writes are not reaching the board")
+                    if self._ack_escalation >= 2:
+                        pulse = getattr(self.ble, "pulse_reset", None)
+                        if pulse is not None:
+                            self._ack_escalation = 0
+                            pulse("reconnect did not restore acks; " + why)
+                            continue
                     force = getattr(self.ble, "force_reconnect", None)
                     if force is not None:
-                        force(f"no status ack for {MISSED_LIMIT} polls "
-                              f"(~{int(MISSED_LIMIT * POLL_INTERVAL)}s) — "
-                              "writes are not reaching the board")
+                        force(why)
                     continue
             self._status_sent_at = time.monotonic()
             await self.ble.send({"cmd": "status"})
@@ -629,6 +642,7 @@ class Daemon:
             # Any status reply proves the write path works.
             self._status_sent_at = None
             self._status_missed = 0
+            self._ack_escalation = 0
         if ack == "status" and obj.get("ok"):
             data = obj.get("data") or {}
             sec = data.get("sec")

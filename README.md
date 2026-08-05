@@ -39,7 +39,6 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | Gesture | Action |
 |---|---|
 | **Swipe card right** | approve prompt (card flies off) |
-| **Swipe card up** | approve prompt (same as right — a quick flick for read cards) |
 | **Swipe card left** | deny prompt |
 | Tap bottom-**left** | next screen |
 | Tap bottom-**right** | next page |
@@ -252,7 +251,7 @@ scope-not-file grant is the point. Deny stays per-file and grants nothing.
 Grants are deliberately not persisted: restarting the daemon forgets them all.
 Approving a file directly in `~` or `/` grants nothing (it would be everything).
 Reads inside the session cwd never card — Claude Code already allows those
-silently. Swipe **up** or right to approve; new sessions pick up the `Read`
+silently. Swipe right to approve; new sessions pick up the `Read`
 hook, already-running ones keep the old terminal behaviour until restarted.
 
 The matcher patterns are **anchored at the start of the command** (`^chmod( |$)`,
