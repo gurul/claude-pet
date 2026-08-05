@@ -159,13 +159,15 @@ void M5Compat::update() {
       // drag can't accumulate reversals and read as a scrub instead. Requires
       // the motion to be mostly vertical, so a diagonal flick during a scrub
       // doesn't fire it.
-      // 70px and 3:1 vertical dominance — 55px/2:1 was loose enough that
-      // tap-and-scrub play misread as swipes and spammed Enter on the Mac
-      // (three in 2.5s observed). An accidental Enter lands in whatever app
-      // has focus, so this gesture must be deliberate-only.
+      // 45px / 2:1. This was briefly 70px/3:1 to stop tap-and-scrub play from
+      // misreading as swipes, but those gestures were then removed entirely —
+      // the only other pet gesture is a HOLD, which is stationary by
+      // definition, so a downward drag has nothing to be confused with. 70px
+      // on a 320px screen was simply too far to reach comfortably and the
+      // gesture stopped firing at all.
       int dyTot = _ty - _petDownY;
       int dxTot = abs(_tx - _petDownX);
-      if (!_swipeFired && dyTot > 70 && dyTot > dxTot * 3) {
+      if (!_swipeFired && dyTot > 45 && dyTot > dxTot * 2) {
         _evSwipeDown = true;
         _swipeFired = true;      // latch: one Enter per press
         _reversals = 0;          // and it is definitively not a scrub
