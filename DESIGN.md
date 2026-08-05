@@ -94,6 +94,23 @@ stopped being scheduled inside `delay()`, no slow iteration beforehand, cause un
 `DIED IN: render` (a 240×320 16-bit `pushSprite` is ~153KB over SPI at 40MHz, ~31ms). Both
 self-heal — the watchdog reboots within 15s.
 
+Disconnect runbook (from the 2026-08-05 crash-loop investigation):
+
+- `[alive]` every 5s is unconditional only **while `loop()` runs**. A silent board on a port
+  that still enumerates and opens means the CPU is hung or rebooting — the USB-Serial/JTAG
+  peripheral is autonomous silicon and keeps enumerating regardless. `diedIn` in the next
+  boot's diag names the stuck phase; the daemon now logs it.
+- The daemon escalates on its own: an ack-less link forces a reconnect with a 15s closed-port
+  hold; repeated silent reopens or a second ack-less cycle RTS-reset the board. **Physical
+  replug is never the runbook** — and it wipes the `RTC_NOINIT` diag ring, so if you must
+  replug, run `cc-buddy-bridge diag` first and save the output.
+- Every `tools/flash.sh` run archives the exact ELF under `firmware/build-archive/` so a
+  panic backtrace stays symbolizable (`xtensa-esp32s3-elf-addr2line -e <elf> <addrs>`). The
+  2026-08-05 05:35 backtrace was lost because the only ELF postdated the crash.
+- The suspected hang site was the WS2812 write: the core's `rgbLedWrite()` ends in
+  `rmtWrite(..., RMT_WAIT_FOR_EVER)`. `ledSet()` now encodes the frame itself with a 100ms
+  deadline and skips the frame on timeout.
+
 ## Gotchas
 
 - **Touch releases need debouncing.** `readTouch()` returns false on a momentary `TD_STATUS==0`

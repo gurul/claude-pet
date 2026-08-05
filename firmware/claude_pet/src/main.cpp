@@ -642,6 +642,10 @@ void setup() {
   // FIRST: capture the reset reason and the pre-reset event ring before any
   // init can crash. Everything after this point is diagnosable.
   diagInit();
+  // Arm the watchdog before the slow parts of setup, not after: a hang
+  // during init used to leave the board silent forever while the USB port
+  // kept enumerating. Setup's delays total ~3.8s against the 15s budget.
+  diagWatchdogBegin();
   M5.begin();
   delay(2000);                       // let the host attach before first prints
   diagReport("boot");                // why the last run ended + what it was doing
@@ -695,8 +699,6 @@ void setup() {
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
   diagLog("setup done buddy=%d", (int)buddyMode);
-  // Arm last: the splash delays above would trip it.
-  diagWatchdogBegin();
 }
 
 void loop() {

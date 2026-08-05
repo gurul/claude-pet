@@ -10,11 +10,32 @@ M5Compat M5;
 // each call is a full RMT transaction bit-banging the WS2812 protocol — pure
 // waste when the colour is identical, which it is the overwhelming majority of
 // the time. Also keeps the RMT peripheral idle instead of continuously driven.
+//
+// Bounded write, NOT rgbLedWrite(): the core's helper ends in
+// rmtWrite(..., RMT_WAIT_FOR_EVER) — the only unbounded blocking call
+// reachable from loop(), and the prime suspect for the TASK-WATCHDOG hang
+// loops (pre-reset rings end at voice start/stop, exactly when the LED
+// changes). Encode the 24 GRB bits ourselves with a 100ms deadline; a
+// timed-out frame is skipped and the next colour change retries.
 void ledSet(uint8_t r, uint8_t g, uint8_t b) {
   static uint8_t lr = 0xFF, lg = 0xFF, lb = 0xFF;
   if (r == lr && g == lg && b == lb) return;
+  static bool rmtReady = false;
+  if (!rmtReady) {
+    if (!rmtInit(PIN_STATUS_LED, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_1, 10000000))
+      return;   // RMT unavailable: a dark LED beats a hung loop
+    rmtReady = true;
+  }
+  rmt_data_t bits[24];
+  uint32_t grb = ((uint32_t)g << 16) | ((uint32_t)r << 8) | b;
+  for (int i = 0; i < 24; i++) {
+    bool one = (grb >> (23 - i)) & 1;   // same 400/800ns split the core uses
+    bits[i].level0 = 1; bits[i].duration0 = one ? 8 : 4;
+    bits[i].level1 = 0; bits[i].duration1 = one ? 4 : 8;
+  }
+  if (!rmtWrite(PIN_STATUS_LED, bits, 24, pdMS_TO_TICKS(100)))
+    return;     // cache not updated → the next call retries this colour
   lr = r; lg = g; lb = b;
-  rgbLedWrite(PIN_STATUS_LED, r, g, b);
 }
 
 // ---- RTC via system clock ----
@@ -96,6 +117,12 @@ void M5Compat::begin() {
   // one-way wedge where the board keeps sending but stops receiving until a
   // hardware reset. Must be called before begin() to take effect.
   Serial.setRxBufferSize(4096);
+  // TX side: bigger ring + short per-write timeout. During host reconnect
+  // churn nothing drains the OUT side; HWCDC writes are bounded (~2.1s worst
+  // case in core 3.3.10) but that still stacks up across a heartbeat's worth
+  // of prints. 20ms means a deaf host costs at most one dropped line.
+  Serial.setTxBufferSize(4096);
+  Serial.setTxTimeoutMs(20);
   Serial.begin(115200);   // USB CDC — M5.begin() used to do this
   // Touch controller reset before Wire so first poll sees a live chip
   pinMode(PIN_TOUCH_RST, OUTPUT);
