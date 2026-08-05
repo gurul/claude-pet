@@ -73,10 +73,24 @@ def _configured_hotkey() -> str:
         return DEFAULT_HOTKEY
     return name
 
+KEY_KEYPAD_ENTER = 76  # kVK_ANSI_KeypadEnter
+
 # Keys the board may ask us to tap. Deliberately a tiny allowlist: the board
 # is a peripheral on a serial line, and "synthesize any keystroke on request"
 # is a much larger surface than this feature needs.
-TAPPABLE = {"enter": KEY_RETURN}
+#
+# "enter" resolves to the main Return key (kVK_Return 36) by default. A few
+# apps distinguish it from the numeric keypad's Enter (kVK_ANSI_KeypadEnter
+# 76) — notably some editors and terminal multiplexers, where Return inserts
+# a newline and keypad Enter submits. CC_BUDDY_ENTER_KEY=keypad switches it.
+def _enter_keycode() -> int:
+    choice = (os.environ.get("CC_BUDDY_ENTER_KEY") or "return").strip().lower()
+    if choice in ("keypad", "keypad-enter", "enter"):
+        return KEY_KEYPAD_ENTER
+    return KEY_RETURN
+
+
+TAPPABLE = {"enter": _enter_keycode()}
 
 # poster signature: (keycode, down, flags_mask) -> None
 Poster = Callable[[int, bool, int], None]

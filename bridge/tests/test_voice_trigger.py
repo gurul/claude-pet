@@ -186,3 +186,14 @@ def test_release_always_clears_flags() -> None:
         releases = [e for e in p.events if e[1] is False]
         assert releases, name
         assert all(flags == 0 for _k, _d, flags in releases), (name, releases)
+
+
+def test_enter_defaults_to_main_return() -> None:
+    from cc_buddy_bridge.voice_trigger import KEY_RETURN, _enter_keycode
+    assert _enter_keycode() == KEY_RETURN
+
+
+def test_enter_can_be_switched_to_keypad(monkeypatch) -> None:
+    from cc_buddy_bridge.voice_trigger import KEY_KEYPAD_ENTER, _enter_keycode
+    monkeypatch.setenv("CC_BUDDY_ENTER_KEY", "keypad")
+    assert _enter_keycode() == KEY_KEYPAD_ENTER
