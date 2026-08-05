@@ -26,7 +26,7 @@ A desk pet that reacts to Claude Code activity, built by forking open-source rep
 
 USB-serial note: opening the S3 native USB CDC port does **not** reset the sketch (unlike UART-bridge boards), so a host daemon holding the port open is safe. It does hold it *exclusively*, though — unload the daemon before flashing or esptool cannot connect.
 
-Partition note: `huge_app` is a 4MB layout on a 16MB part, so ~12MB of flash is unaddressed and LittleFS gets 896KB. That is enough for the GIF character packs today. Moving to `default_16MB` (6.25MB app ×2 OTA + 3.5MB LittleFS) means relocating `spiffs` from 0x310000 to 0xc90000, so it needs a full `esptool erase-flash` first — see the partition gotcha in the README before attempting it.
+Partition note: `huge_app` is a 4MB layout on a 16MB part, so ~12MB of flash is unaddressed and LittleFS gets 896KB. That is enough for the GIF character packs today. Moving to `default_16MB` (6.25MB app ×2 OTA + 3.5MB LittleFS) means relocating `spiffs` from 0x310000 to 0xc90000, so it needs a full `esptool erase-flash` first — see the partition gotcha below before attempting it.
 
 ## Architecture
 
@@ -77,6 +77,55 @@ instead of the upstream tap-left/tap-right panel:
   distance, with a beep latch at 100%.
 - **Memory:** the card sprite (33KB) allocates on prompt arrival and frees on resolve; if
   allocation fails the card draws directly on the main sprite, untilted, and swiping still works.
+
+## Diagnostics
+
+A frozen board used to tell you nothing: the screen is stale and the single USB CDC pipe (which
+the daemon owns exclusively) just goes quiet. UART0 (43/44) is free but needs a USB-TTL adapter
+wired on, so `src/diag.h` takes the no-extra-hardware route instead — an event ring in
+`RTC_NOINIT` memory (survives panics, watchdog reboots and software resets, not power loss), the
+decoded `esp_reset_reason()`, and a task watchdog on `loop()` so a true hang reboots and reports
+rather than sitting there silently. A one-byte phase marker per loop stage names the call that
+never returned, and any iteration ≥250ms is logged with the stage that ate the time.
+`cc-buddy-bridge diag` decodes all of it on the next boot.
+
+Two hangs are still open, distinguished by the phase marker: `DIED IN: loop end` (loop task
+stopped being scheduled inside `delay()`, no slow iteration beforehand, cause unknown) and
+`DIED IN: render` (a 240×320 16-bit `pushSprite` is ~153KB over SPI at 40MHz, ~31ms). Both
+self-heal — the watchdog reboots within 15s.
+
+## Gotchas
+
+- **Touch releases need debouncing.** `readTouch()` returns false on a momentary `TD_STATUS==0`
+  or any I2C hiccup mid-press. Treating that as a release fired a tap, then the next poll saw the
+  finger again and began a fresh press — one finger produced ~6 taps/second, and the storm wedged
+  the loop task into a watchdog reset. `TOUCH_UP_POLLS` consecutive empty reads are now required
+  before believing a release; any new gesture must debounce the same way.
+- **LittleFS formats itself on first boot.** A freshly flashed board's `spiffs` partition has
+  never been formatted and `LittleFS.begin(false)` will not format it — it stays at `fsTotal=0`
+  forever and the daemon rejects every character push. `characterInit()` formats once when the
+  mount genuinely fails; safe, since the partition only holds re-pushable GIF packs.
+- **Partition gotcha.** A sketch-local `partitions.csv` is silently ignored by arduino-cli +
+  esp32 3.3.10 — the flash ends up with a stale default table and an unbootable app. Use an
+  explicit `PartitionScheme`, and `esptool erase-flash` when in doubt.
+- **HWCDC needs DTR.** The S3 drops all `Serial` TX unless the host asserts DTR — `cat` sees
+  nothing, pyserial with `dtr=True` does.
+- **A one-way serial link looks healthy.** USB re-enumeration (every board reset, including
+  esptool's) leaves the host holding a file descriptor that no longer reaches the device: writes
+  succeed into the void, reads return empty, nothing raises. The firmware prints `[alive]` every
+  5s and the transport forces a reconnect after 20s of silence.
+- **Clock glyph padding is load-bearing.** Both faces centre the time and repaint only their own
+  glyph cells, so the 5→4 character shrink at 12:59 → 1:00 would strand pixels. The hour is
+  space-padded, and the leading space draws as a background-filled cell that clears them.
+- **The host allowlists exactly one key.** `{"cmd":"key","name":...}` accepts only `enter` — a
+  peripheral on a serial line asking for arbitrary keystrokes is a much larger surface than this
+  needs. It is also refused during a push-to-talk hold, where Option is still down and a bare
+  Return would arrive as Opt+Return.
+- **Held modifiers are released defensively.** A stuck modifier breaks typing system-wide, so the
+  daemon force-releases after 60s if the release event is lost, and always on shutdown. Releases
+  carry `flags=0` — asserting the modifier flag on key-up tells macOS the key is still down.
+- **Bash matchers are anchored at the start of the command** (`^git push( |$)`, …). A leading
+  variable assignment or `cd` defeats them, and the command quietly takes the default path.
 
 ## Phases
 
