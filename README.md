@@ -68,8 +68,12 @@ crossing them can't change screens or dizzy the pet.
 ### Hold the pet to dictate (VoiceFlow)
 
 Press and hold the pet for 600ms (steady finger, <20px drift) and the bridge
-holds **Option+Space** — [VoiceFlow](https://github.com/Alexander-Ollman/voiceflow)'s
-global push-to-talk — until you let go. Finger down = recording (WS2812 goes
+holds your dictation app's global push-to-talk hotkey until you let go.
+Default is the **fn** key ([Willow Voice](https://willowvoice.com), and macOS's
+own dictation); set `CC_BUDDY_VOICE_HOTKEY=opt-space` for
+[VoiceFlow](https://github.com/Alexander-Ollman/voiceflow). fn is a
+*secondary-fn modifier* rather than an ordinary key, so its event carries
+`kCGEventFlagMaskSecondaryFn` — without that flag listeners ignore it. Finger down = recording (WS2812 goes
 solid blue), finger up = VoiceFlow transcribes and pastes at the cursor. A hold
 never fires the heart tap, and scrub detection is off while holding so finger
 wobble mid-dictation can't dizzy the pet. Release works even if a prompt or

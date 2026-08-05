@@ -1277,8 +1277,12 @@ void loop() {
           // NOT a decision — the card snaps back and stays pending. Only
           // counts when the drag was clearly vertical, so a sloppy
           // approve/deny swipe can't turn into a window switch.
+          // 35px, not 50: the drag must START inside the 116px-tall card
+          // band, so a 50px upward flick left almost no room and the gesture
+          // kept failing in practice. 35px is still well clear of a jittery
+          // tap, and the sideways gate keeps it distinct from approve/deny.
           int dyUp = cardGrabY - M5.touchY();
-          if (dyUp > 50 && fabsf(cardX) < CARD_COMMIT * 0.5f) {
+          if (dyUp > 35 && fabsf(cardX) < CARD_COMMIT * 0.6f) {
             char fc[80];
             snprintf(fc, sizeof(fc), "{\"cmd\":\"focus\",\"id\":\"%s\"}", tama.promptId);
             sendCmd(fc);

@@ -49,6 +49,26 @@ on run argv
 end run
 '''
 
+# Ghostty and Warp expose no useful AppleScript window model (Warp's is
+# minimal; Ghostty has none), so there is no way to pick the right window by
+# cwd. Activating the app is the honest best effort: it puts the human in the
+# right program, one Cmd+` from the right window.
+_ACTIVATE_SCRIPT = '''
+on run argv
+  tell application id (item 1 of argv) to activate
+  return "activated"
+end run
+'''
+
+# Bundle ids, tried in order after the AppleScript-capable terminals.
+_ACTIVATE_TARGETS = [
+    ("ghostty", "com.mitchellh.ghostty"),
+    ("stable", "dev.warp.Warp-Stable"),
+    ("Warp", "dev.warp.Warp"),
+    ("Cursor", "com.todesktop.230313mzl4w4u92"),
+    ("Code", "com.microsoft.VSCode"),
+]
+
 _TERMINAL_SCRIPT = '''
 on run argv
   set needle to item 1 of argv
@@ -102,6 +122,14 @@ async def focus_session_terminal(cwd: str) -> None:
             log.info("focus: Terminal %s (needle=%r)", result or "error", needle)
             if result:
                 return
+        # No scriptable window model — just raise the app that is running.
+        for proc_name, bundle_id in _ACTIVATE_TARGETS:
+            if await _app_running(proc_name):
+                result = await _osascript(_ACTIVATE_SCRIPT, bundle_id)
+                log.info("focus: activated %s (%s)", proc_name,
+                         result or "error")
+                if result:
+                    return
         log.info("focus: no known terminal app running (needle=%r)", needle)
     except Exception as e:  # noqa: BLE001
         log.warning("focus: failed non-fatally: %s", e)

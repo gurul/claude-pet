@@ -1,19 +1,21 @@
-"""Hold-the-pet push-to-talk: synthesize a global Option+Space hold.
+"""Hold-the-pet push-to-talk: synthesize a global dictation-hotkey hold.
 
 The stick sends {"cmd":"voice","state":"start"} when a finger settles on the
-pet for 600ms and "stop" on release. VoiceFlow (menu-bar dictation app)
-records while its global hotkey Option+Space is held and pastes on release —
-so the bridge simply holds the hotkey down between the two events: finger
-down = key down, finger up = key up, dictation lands wherever the cursor is.
+pet for 600ms and "stop" on release. Push-to-talk dictation apps record while
+their global hotkey is held and paste on release — so the bridge simply holds
+that hotkey between the two events: finger down = key down, finger up = key
+up, dictation lands wherever the cursor is.
 
-Mechanics: Quartz CGEventPost at the HID tap. Option (kVK_Option 58) goes
-down as its own key event before Space (kVK_Space 49) carrying the alternate
-flag — apps that track the physical modifier (flagsChanged) and apps that
-only read event flags both see a plausible human hold. Release runs in
-reverse order.
+Which hotkey is configurable (CC_BUDDY_VOICE_HOTKEY), because it is a property
+of the dictation app, not of the pet: `fn` for Willow Voice (default), or
+`opt-space` for VoiceFlow. See HOTKEYS.
 
-Stuck-key safety, because a system-wide held Option+Space is genuinely
-disruptive (every space types "·"-style alternates, other hotkeys misfire):
+Mechanics: Quartz CGEventPost at the HID tap, from a real HIDSystemState
+event source — events built with a NULL source carry no keyboard state and
+apps drop them. Chord keys press in order and release in reverse.
+
+Stuck-key safety, because a system-wide held modifier is genuinely
+disruptive (fn or Option stuck down breaks typing everywhere):
 
 * a watchdog force-releases after MAX_HOLD_SECS if the stop event never
   arrives (serial died mid-hold, board reset while recording);
@@ -29,24 +31,55 @@ mysteriously do nothing).
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
-KEY_SPACE = 49   # kVK_Space
-KEY_OPTION = 58  # kVK_Option
-KEY_RETURN = 36  # kVK_Return
+KEY_SPACE = 49     # kVK_Space
+KEY_OPTION = 58    # kVK_Option
+KEY_RETURN = 36    # kVK_Return
+KEY_FUNCTION = 63  # kVK_Function — the fn key
 MAX_HOLD_SECS = 60.0
+
+# Event flag masks (Quartz constants, hardcoded so the module imports on
+# non-mac hosts for testing).
+FLAG_ALTERNATE = 0x00080000   # kCGEventFlagMaskAlternate
+FLAG_SECONDARY_FN = 0x00800000  # kCGEventFlagMaskSecondaryFn
+
+# Push-to-talk chords, as ordered (keycode, flags) pairs pressed in sequence
+# and released in reverse. Which dictation app you use decides the chord:
+#
+#   fn         Willow Voice, and macOS's own dictation — a bare fn hold. fn is
+#              a *secondary-fn modifier*, not an ordinary key, so the event
+#              must carry FLAG_SECONDARY_FN or listeners ignore it.
+#   opt-space  VoiceFlow. Option goes down as its own key event first so apps
+#              tracking the physical modifier (flagsChanged) see it, then
+#              Space carries the alternate flag for apps that read flags.
+HOTKEYS: dict[str, list[tuple[int, int]]] = {
+    "fn": [(KEY_FUNCTION, FLAG_SECONDARY_FN)],
+    "opt-space": [(KEY_OPTION, 0), (KEY_SPACE, FLAG_ALTERNATE)],
+}
+DEFAULT_HOTKEY = "fn"
+
+
+def _configured_hotkey() -> str:
+    name = (os.environ.get("CC_BUDDY_VOICE_HOTKEY") or DEFAULT_HOTKEY).strip().lower()
+    if name not in HOTKEYS:
+        log.warning("voice: unknown CC_BUDDY_VOICE_HOTKEY=%r; using %s",
+                    name, DEFAULT_HOTKEY)
+        return DEFAULT_HOTKEY
+    return name
 
 # Keys the board may ask us to tap. Deliberately a tiny allowlist: the board
 # is a peripheral on a serial line, and "synthesize any keystroke on request"
 # is a much larger surface than this feature needs.
 TAPPABLE = {"enter": KEY_RETURN}
 
-# poster signature: (keycode, down, with_option_flag) -> None
-Poster = Callable[[int, bool, bool], None]
+# poster signature: (keycode, down, flags_mask) -> None
+Poster = Callable[[int, bool, int], None]
 
 
 def _quartz_poster() -> Optional[Poster]:
@@ -69,10 +102,10 @@ def _quartz_poster() -> Optional[Poster]:
     except Exception:  # noqa: BLE001
         src = None
 
-    def post(keycode: int, down: bool, with_option: bool) -> None:
+    def post(keycode: int, down: bool, flags: int) -> None:
         ev = Quartz.CGEventCreateKeyboardEvent(src, keycode, down)
-        if with_option:
-            Quartz.CGEventSetFlags(ev, Quartz.kCGEventFlagMaskAlternate)
+        if flags:
+            Quartz.CGEventSetFlags(ev, flags)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     return post
@@ -111,7 +144,10 @@ class VoiceHold:
 
     def __init__(self, poster: Optional[Poster] = None,
                  clock: Callable[[], float] = time.monotonic,
-                 trust_check: Optional[Callable[[], bool]] = None) -> None:
+                 trust_check: Optional[Callable[[], bool]] = None,
+                 hotkey: Optional[str] = None) -> None:
+        self._hotkey = (hotkey or _configured_hotkey())
+        self._chord = HOTKEYS[self._hotkey]
         # Injected poster (tests) skips the Accessibility machinery entirely;
         # the real Quartz poster gets the real trust check unless overridden.
         if poster is None:
@@ -148,21 +184,21 @@ class VoiceHold:
                     sys.executable)
                 return False        # keep the check armed for the next hold
             self._trust_check = None  # verified once; stop re-checking
-        self._poster(KEY_OPTION, True, False)
-        self._poster(KEY_SPACE, True, True)
+        for keycode, flags in self._chord:
+            self._poster(keycode, True, flags)
         self._held_since = self._clock()
-        log.info("voice: hold started (Opt+Space down)")
+        log.info("voice: hold started (%s down)", self._hotkey)
         return True
 
     def stop(self) -> None:
         if not self.active or self._poster is None:
             self._held_since = None
             return
-        self._poster(KEY_SPACE, False, True)
-        self._poster(KEY_OPTION, False, False)
+        for keycode, flags in reversed(self._chord):
+            self._poster(keycode, False, flags if keycode != KEY_OPTION else 0)
         held = self._clock() - (self._held_since or self._clock())
         self._held_since = None
-        log.info("voice: hold released after %.1fs (Opt+Space up)", held)
+        log.info("voice: hold released after %.1fs (%s up)", held, self._hotkey)
 
     def diagnose(self) -> int:
         """Print why push-to-talk is or isn't working. Returns an exit code.
@@ -217,9 +253,8 @@ class VoiceHold:
     def tap(self, name: str) -> bool:
         """Press and release one allowlisted key (swipe-down → Enter).
 
-        Refused while a push-to-talk hold is active: injecting Return with
-        Option still down would send Opt+Return, which is a different chord in
-        most apps.
+        Refused while a push-to-talk hold is active: the dictation modifier
+        is still down, so a bare Return would arrive as a different chord.
         """
         key = TAPPABLE.get(name)
         if key is None:
@@ -240,12 +275,12 @@ class VoiceHold:
                 log.warning("key: Accessibility not granted — see `voice-check`")
                 return False
             self._trust_check = None
-        self._poster(key, True, False)
+        self._poster(key, True, 0)
         # Hold briefly. A down/up in the same microsecond is not a keypress any
         # human could produce, and apps that debounce or sample input on a
         # frame boundary drop it entirely.
         time.sleep(0.03)
-        self._poster(key, False, False)
+        self._poster(key, False, 0)
         log.info("key: tapped %s", name)
         return True
 

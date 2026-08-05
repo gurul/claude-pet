@@ -8,6 +8,9 @@ hold asserts the exact release sequence actually happened.
 from __future__ import annotations
 
 from cc_buddy_bridge.voice_trigger import (
+    FLAG_ALTERNATE,
+    FLAG_SECONDARY_FN,
+    KEY_FUNCTION,
     KEY_OPTION,
     KEY_RETURN,
     KEY_SPACE,
@@ -18,10 +21,10 @@ from cc_buddy_bridge.voice_trigger import (
 
 class FakePoster:
     def __init__(self) -> None:
-        self.events: list[tuple[int, bool, bool]] = []
+        self.events: list[tuple[int, bool, int]] = []
 
-    def __call__(self, keycode: int, down: bool, with_option: bool) -> None:
-        self.events.append((keycode, down, with_option))
+    def __call__(self, keycode: int, down: bool, flags: int) -> None:
+        self.events.append((keycode, down, flags))
 
 
 class FakeClock:
@@ -34,7 +37,7 @@ class FakeClock:
 
 def _hold(trusted: bool = True) -> tuple[VoiceHold, FakePoster, FakeClock]:
     p, c = FakePoster(), FakeClock()
-    v = VoiceHold(poster=p, clock=c,
+    v = VoiceHold(poster=p, clock=c, hotkey="opt-space",
                   trust_check=(lambda: trusted) if not trusted else None)
     return v, p, c
 
@@ -42,7 +45,7 @@ def _hold(trusted: bool = True) -> tuple[VoiceHold, FakePoster, FakeClock]:
 def test_start_posts_option_then_space_down() -> None:
     v, p, _ = _hold()
     assert v.start()
-    assert p.events == [(KEY_OPTION, True, False), (KEY_SPACE, True, True)]
+    assert p.events == [(KEY_OPTION, True, 0), (KEY_SPACE, True, FLAG_ALTERNATE)]
     assert v.active
 
 
@@ -50,7 +53,7 @@ def test_stop_releases_space_then_option() -> None:
     v, p, _ = _hold()
     v.start()
     v.stop()
-    assert p.events[2:] == [(KEY_SPACE, False, True), (KEY_OPTION, False, False)]
+    assert p.events[2:] == [(KEY_SPACE, False, FLAG_ALTERNATE), (KEY_OPTION, False, 0)]
     assert not v.active
 
 
@@ -83,7 +86,7 @@ def test_overdue_after_max_hold() -> None:
     assert v.overdue()
     v.stop()   # watchdog path: releases cleanly
     assert not v.overdue()
-    assert p.events[-2:] == [(KEY_SPACE, False, True), (KEY_OPTION, False, False)]
+    assert p.events[-2:] == [(KEY_SPACE, False, FLAG_ALTERNATE), (KEY_OPTION, False, 0)]
 
 
 def test_untrusted_never_posts_and_stays_armed() -> None:
@@ -116,7 +119,7 @@ def test_no_poster_is_a_clean_noop() -> None:
 def test_tap_enter_presses_and_releases() -> None:
     v, p, _ = _hold()
     assert v.tap("enter")
-    assert p.events == [(KEY_RETURN, True, False), (KEY_RETURN, False, False)]
+    assert p.events == [(KEY_RETURN, True, 0), (KEY_RETURN, False, 0)]
 
 
 def test_tap_refuses_unknown_key() -> None:
@@ -139,3 +142,32 @@ def test_tap_untrusted_posts_nothing() -> None:
     v = VoiceHold(poster=p, trust_check=lambda: False)
     assert not v.tap("enter")
     assert p.events == []
+
+
+# ---- hotkey selection (Willow Voice = fn, VoiceFlow = opt-space) ----
+
+def test_fn_hotkey_holds_the_function_key() -> None:
+    p = FakePoster()
+    v = VoiceHold(poster=p, hotkey="fn", trust_check=None)
+    assert v.start()
+    # fn must carry the secondary-fn flag or listeners ignore it entirely.
+    assert p.events == [(KEY_FUNCTION, True, FLAG_SECONDARY_FN)]
+    v.stop()
+    assert p.events[-1] == (KEY_FUNCTION, False, FLAG_SECONDARY_FN)
+
+
+def test_fn_is_the_default() -> None:
+    v = VoiceHold(poster=FakePoster(), trust_check=None)
+    assert v._hotkey == "fn"
+
+
+def test_unknown_hotkey_env_falls_back(monkeypatch) -> None:
+    monkeypatch.setenv("CC_BUDDY_VOICE_HOTKEY", "banana")
+    v = VoiceHold(poster=FakePoster(), trust_check=None)
+    assert v._hotkey == "fn"
+
+
+def test_env_selects_opt_space(monkeypatch) -> None:
+    monkeypatch.setenv("CC_BUDDY_VOICE_HOTKEY", "opt-space")
+    v = VoiceHold(poster=FakePoster(), trust_check=None)
+    assert v._hotkey == "opt-space"
