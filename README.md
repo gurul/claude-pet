@@ -43,8 +43,8 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | Tap bottom-**left** | next screen |
 | Tap bottom-**right** | next page |
 | **Hold** bottom-left | menu |
-| **Hold the pet** | push-to-talk: dictate via VoiceFlow while held (LED solid blue) |
-| **Swipe down on the pet** | press Enter on the Mac — dictate, then swipe to send |
+| **Hold the pet** | push-to-talk: hold your dictation app's hotkey (LED solid blue) |
+| **Swipe down** (anywhere) | press Enter on the Mac — dictate, then swipe to send |
 
 The WS2812 pulses orange while an approval is pending, green on celebrate, solid blue while dictating.
 
@@ -65,38 +65,66 @@ Approve maps to Claude Code's *allow once*; deny is *deny*. Fast approvals (<5s)
 heart. While a prompt is up, the tap zones and pet gestures are suspended so a swipe
 crossing them can't change screens or dizzy the pet.
 
-### Hold the pet to dictate (VoiceFlow)
+### Hold the pet to dictate
 
 Press and hold the pet for 600ms (steady finger, <20px drift) and the bridge
-holds your dictation app's global push-to-talk hotkey until you let go.
-Default is the **fn** key ([Willow Voice](https://willowvoice.com), and macOS's
-own dictation); set `CC_BUDDY_VOICE_HOTKEY=opt-space` for
-[VoiceFlow](https://github.com/Alexander-Ollman/voiceflow). fn is a
-*secondary-fn modifier* rather than an ordinary key, so its event carries
-`kCGEventFlagMaskSecondaryFn` — without that flag listeners ignore it. Finger down = recording (WS2812 goes
-solid blue), finger up = VoiceFlow transcribes and pastes at the cursor. A hold
-never fires the heart tap, and scrub detection is off while holding so finger
-wobble mid-dictation can't dizzy the pet. Release works even if a prompt or
-menu opens mid-hold.
+holds your dictation app's global push-to-talk hotkey until you let go. Finger
+down = recording (WS2812 goes solid blue), finger up = the app transcribes and
+pastes at the cursor. Release works even if a prompt or menu opens mid-hold.
 
-Requirements on the Mac: VoiceFlow running, and **Accessibility permission**
-for the daemon's python (System Settings → Privacy & Security → Accessibility —
-the first hold triggers the system prompt; nothing is posted until granted,
-since macOS silently filters synthetic events from untrusted processes).
+**The pet is dictation-app agnostic.** It knows nothing about any particular
+app — it just holds a hotkey, so anything with press-and-hold dictation works:
+[Willow Voice](https://willowvoice.com), [Wispr Flow](https://wisprflow.ai),
+[VoiceFlow](https://github.com/Alexander-Ollman/voiceflow), macOS's built-in
+dictation, or whatever you use. Point `CC_BUDDY_VOICE_HOTKEY` at whichever
+chord that app listens for:
 
-Stuck-key safety: the daemon force-releases after 60s if the release event is
-lost (board reset mid-hold, serial drop), and always releases on shutdown. A
-system-wide held Opt+Space is the one failure this feature is not allowed to
-have.
+| Value | Chord | Typical app |
+|---|---|---|
+| `option` *(default)* | hold ⌥ | Willow Voice |
+| `opt-space` | hold ⌥Space | VoiceFlow |
+| `fn` | hold fn | macOS dictation, Willow's default binding |
+
+Adding another chord is a one-line entry in `HOTKEYS` (`voice_trigger.py`) —
+an ordered list of `(keycode, flags)` pairs, pressed in order and released in
+reverse.
+
+**A warning about `fn`, learned the hard way.** It is not an ordinary key but a
+*secondary-fn modifier*, and many apps detect it through the raw HID usage that
+synthetic events cannot reach — Willow Voice ignored ours completely while
+logging a perfectly clean hold on our side. If your app's hotkey is fn and
+nothing happens, rebind it in that app to an ordinary chord (⌥, ⌥Space, F13…);
+those synthesize reliably. Ordinary modifiers are the safe choice.
+
+Requirements on the Mac: your dictation app running, and **Accessibility
+permission** for the daemon's python (System Settings → Privacy & Security →
+Accessibility — the first hold triggers the system prompt; nothing is posted
+until granted, since macOS silently filters synthetic events from untrusted
+processes). `cc-buddy-bridge voice-check` diagnoses this and prints the exact
+binary to add — note that a venv python is a symlink and macOS keys the grant
+to the resolved interpreter, so stale entries in that list will shadow a good
+grant.
+
+Stuck-key safety: a held modifier breaks typing system-wide, so the daemon
+force-releases after 60s if the release event is lost (board reset mid-hold,
+serial drop) and always releases on shutdown. Releases carry `flags=0` —
+asserting the modifier flag on a key-up tells macOS the key is *still down*,
+which is exactly how fn once stuck for real.
 
 ### Swipe down to send
 
-A strongly-vertical drag of more than 70px on the pet taps **Enter** on the Mac,
+A mostly-vertical drag of more than 45px — starting anywhere on the panel —
+taps **Enter** on the Mac,
 so the natural loop is: hold to dictate, release, swipe down to send. It fires
-the moment the threshold is crossed rather than on release and latches one
-Enter per press. The 70px / 3:1-vertical gate is deliberately strict — an
-accidental Enter lands in whatever app has focus, so this gesture must never
-fire from casual touching.
+the moment the threshold is crossed rather than on release, and latches one
+Enter per press.
+
+Gestures start **anywhere on the screen**, including the bottom button strip,
+and keep tracking wherever the finger travels. An earlier version aborted a
+drag the instant it crossed into the strip, which killed the swipe ~39px into
+a 45px threshold and made it fail from most of the panel. Taps in the strip
+still work as buttons — the button is withdrawn only once the press actually
+becomes a swipe or a hold.
 
 Touching the pet is functional only: tap-for-heart and scrub-for-dizzy were
 removed by owner decree — the pet's moods come from Claude's state, not from
@@ -150,6 +178,19 @@ logged with the stage that ate the time.
 This found the tap-storm hang within minutes of existing: bursts of ~15 taps at
 a metronomic 175ms, dying 39ms after the last one — see the touch-debounce note
 in Porting notes.
+
+**Known issue it is currently chasing.** Some hangs still occur. The phase
+marker separates them into two distinct failures rather than one vague
+"it froze":
+
+* `DIED IN: loop end` — the loop task stopped being scheduled inside
+  `delay()`, with no slow iteration beforehand. Cause not yet identified.
+* `DIED IN: render (buddy/sprite push)` — a 240x320 16-bit `pushSprite` is
+  ~153KB over SPI at 40MHz (~31ms), and the hang lands inside that path.
+
+Both self-heal: the watchdog reboots within 15s and the next boot reports what
+it was doing. That is the difference between a dead board needing a replug and
+a diagnosable event.
 
 ### The clock face
 
