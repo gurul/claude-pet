@@ -305,6 +305,17 @@ class Daemon:
         if evt not in ("pretooluse", "get_state"):
             log.info("ipc evt=%r session=%s", evt, (req.get("session_id") or "?")[:8])
 
+        if evt == "celebrate":
+            # Host-triggered celebration. Reuses the same `completed: true`
+            # heartbeat flag the pet already celebrates on, so no firmware
+            # support is needed — the board cannot tell this from a finished
+            # Claude turn, which is exactly the point.
+            secs = float(req.get("secs") or 5.0)
+            self.state.pulse_completed(secs)
+            await self._push_heartbeat(force=True)
+            log.info("celebrate: pulsed for %.0fs", secs)
+            return {"ok": True, "connected": self.ble.connected}
+
         if evt == "species":
             # Replaces the retired on-device menu. Firmware persists the index
             # in NVS, so this survives reboots.

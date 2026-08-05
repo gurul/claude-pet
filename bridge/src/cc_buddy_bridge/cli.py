@@ -60,6 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     p_status = sub.add_parser("status", help="Show install status")
     p_status.add_argument("--config-dir", default=None, help=CONFIG_DIR_HELP)
 
+    p_celebrate = sub.add_parser(
+        "celebrate",
+        help="Make the pet celebrate — useful to signal a green CI run or a finished job",
+    )
+    p_celebrate.add_argument("--secs", type=float, default=5.0,
+                             help="How long to celebrate (default 5)")
+    p_celebrate.add_argument("--socket", default=None, help="IPC path or host:port override")
+
     p_species = sub.add_parser(
         "species",
         help="Set the pet's character (replaces the retired on-device menu)",
@@ -151,6 +159,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         from .installer import show_status
         return show_status(config_dir=getattr(args, "config_dir", None))
+    if args.cmd == "celebrate":
+        from .hooks._client import post
+        resp = post({"evt": "celebrate", "secs": args.secs},
+                    socket_path=args.socket, timeout=3.0)
+        if resp is None:
+            print("cc-buddy-bridge: daemon not reachable", file=sys.stderr)
+            return 2
+        if not resp.get("connected"):
+            print("board not connected — nothing to celebrate on", file=sys.stderr)
+            return 2
+        print(f"pet celebrating for {args.secs:.0f}s")
+        return 0
     if args.cmd == "species":
         return _run_species(args.name, args.socket)
     if args.cmd == "diag":
