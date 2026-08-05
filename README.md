@@ -47,6 +47,7 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | **Tap the pet** | pet it → heart |
 | **Scrub the pet** | dizzy! |
 | **Hold the pet** | push-to-talk: dictate via VoiceFlow while held (LED solid blue) |
+| **Swipe down on the pet** | press Enter on the Mac — dictate, then swipe to send |
 
 The WS2812 pulses orange while an approval is pending, pink on heart, green on celebrate.
 
@@ -86,6 +87,55 @@ Stuck-key safety: the daemon force-releases after 60s if the release event is
 lost (board reset mid-hold, serial drop), and always releases on shutdown. A
 system-wide held Opt+Space is the one failure this feature is not allowed to
 have.
+
+### Swipe down to send
+
+A mostly-vertical drag of more than 55px on the pet taps **Enter** on the Mac,
+so the natural loop is: hold to dictate, release, swipe down to send. It fires
+the moment the threshold is crossed rather than on release, latches one Enter
+per press, and is tested before scrub so a deliberate downward drag can't
+accumulate direction reversals and read as *dizzy* instead.
+
+The host allowlists exactly one key. A peripheral on a serial line asking for
+arbitrary keystrokes is a far larger surface than this feature needs, so
+`{"cmd":"key","name":...}` accepts only `enter`. It is also refused while a
+push-to-talk hold is active — Option is still held down there, and a bare
+Return would arrive as Opt+Return.
+
+### Debugging a freeze — the diag port
+
+A frozen board used to tell you nothing: the screen is stale and the single USB
+CDC pipe (which the daemon owns exclusively) just goes quiet.
+[era-firmware](https://github.com/Era-Laboratories/era-firmware-rs) solves this
+by splitting protocol onto USB and logs onto UART0. This board's UART0 pins
+(43/44) are free so that route stays open, but it needs a USB-TTL adapter wired
+on — so the same answer is available here with no extra hardware:
+
+```bash
+cc-buddy-bridge diag           # why the board last reset, and what it was doing
+cc-buddy-bridge diag --watch   # leave running to catch the next freeze
+```
+
+```
+boot #6   last reset: TASK-WATCHDOG  <-- ABNORMAL
+DIED IN: loop end   (entered 58121ms, 866 loops)
+
+what it was doing before that reset (oldest first):
+    42.40s  gesture tap
+    42.58s  gesture tap
+    ...
+```
+
+Three mechanisms in `src/diag.h`: an event ring in `RTC_NOINIT` memory (survives
+panics, watchdog reboots and software resets — not power loss), the decoded
+`esp_reset_reason()`, and a **task watchdog** on `loop()` so a true hang reboots
+and reports rather than sitting there silently forever. A one-byte phase marker
+per loop stage names the call that never returned, and any iteration ≥250ms is
+logged with the stage that ate the time.
+
+This found the tap-storm hang within minutes of existing: bursts of ~15 taps at
+a metronomic 175ms, dying 39ms after the last one — see the touch-debounce note
+in Porting notes.
 
 ### The clock face
 
@@ -220,6 +270,12 @@ instead of prompting. Worth knowing when a command you expected to gate doesn't.
   Bluedroid code; USB serial replaces it entirely. Restore from upstream if you want desktop-app pairing.
 - **HWCDC gotcha:** the S3 drops all `Serial` TX unless the host asserts **DTR** — `cat`
   won't see output; pyserial with `dtr=True` will. Opening the port does *not* reset the sketch.
+- **Touch releases need debouncing.** `readTouch()` returns false on a momentary
+  `TD_STATUS==0` or any I2C hiccup mid-press. Treating that as a release fired a
+  tap, then the next poll saw the finger again and began a fresh press — one
+  finger produced ~6 taps/second, and the storm wedged the loop task into a
+  watchdog reset. `TOUCH_UP_POLLS` consecutive empty reads are now required
+  before believing a release. Any new gesture must debounce the same way.
 - **LittleFS formats itself on first boot.** A freshly flashed board has a `spiffs`
   partition that has never been formatted, and `LittleFS.begin(false)` will not format it —
   it stays at `fsTotal=0` forever and the daemon rejects every character push with
