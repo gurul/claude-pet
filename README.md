@@ -23,16 +23,25 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 - **Mirrors Claude's state.** Sleeping, busy, waiting, celebrating — driven by Claude Code
   hooks plus a tailer over the session transcripts for tokens and message counts.
 - **Approves tool calls from the board.** Risky commands (`git push`, `rm`, …) and reads
-  outside the session directory render as a swipe card with a 300s timeout, falling back to
-  the terminal. Approving a read grants its whole enclosing repo for the daemon's lifetime.
+  outside the session directory render as a swipe card. The card shows which session is
+  asking, how many more prompts wait behind it (a peeking deck + "+N" badge), and a bar
+  draining toward the 300s terminal fallback. Destructive commands (`rm`, `sudo`,
+  `git reset --hard`, …) get a red border and need a longer, harder swipe to approve.
+  Tap the card for a full-screen view of the whole command; hold it at the right edge to
+  approve **and stop being asked** for that command shape (daemon lifetime). Approving a
+  read grants its whole enclosing repo for the daemon's lifetime.
 - **Push-to-talk dictation.** Hold the pet and the daemon holds your dictation app's global
   hotkey until you let go — app-agnostic, it just holds a chord.
-- **Swipe down to send.** A vertical swipe presses Enter on the Mac, so the loop is: hold to
-  dictate, release, swipe down.
-- **Shows a clock when idle.** On USB power with nothing running, the home screen becomes a
-  12-hour clock with the pet dozing underneath.
-- **Reports its own crashes.** `cc-buddy-bridge diag` prints why the board last reset and
-  what it was doing, from an event ring that survives panics and watchdog reboots.
+- **Hands-on-pet option picking.** Swipe left/right to walk Claude Code's option pickers
+  (Up/Down arrows), swipe down for Enter — so the loop is: hold to dictate, release,
+  swipe to choose, swipe down to send.
+- **Always shows the time.** A small clock sits top-left of the pet whenever the bridge has
+  synced the RTC.
+- **Reports its own crashes — and recovers alone.** `cc-buddy-bridge diag` prints why the
+  board last reset, what it was doing, and which loop phase hung, from an event ring that
+  survives panics and watchdog reboots. The daemon watches the link both ways and escalates
+  from reconnects (with a deliberate closed-port hold) up to an automatic RTS hardware reset
+  of the board, so a wedged link heals without touching a cable.
 
 ## Hardware
 
@@ -60,8 +69,8 @@ whole UI. Species and settings are host-side via the CLI
 (`cc-buddy-bridge species`, `matchers.toml`); battery and link state via
 `cc-buddy-bridge status` / `diag`.
 
-The WS2812 pulses orange while an approval is pending, green on celebrate, solid blue while
-dictating.
+The WS2812 pulses orange while an approval is pending, green on celebrate, pink on heart,
+solid blue while dictating.
 
 ## Build & flash
 
@@ -69,20 +78,15 @@ dictating.
 arduino-cli core install esp32:esp32          # tested with 3.3.10
 arduino-cli lib install ArduinoJson AnimatedGIF TFT_eSPI
 
-FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashMode=qio,FlashSize=16M,PSRAM=opi,PartitionScheme=huge_app"
-arduino-cli compile -b "$FQBN" \
-  --build-property "compiler.cpp.extra_flags=-DUSER_SETUP_LOADED=1 -include $PWD/firmware/claude_pet/tft_setup.h" \
-  firmware/claude_pet
-
-launchctl bootout gui/$(id -u)/com.github.cc-buddy-bridge.daemon   # free the serial port
-arduino-cli upload -p /dev/cu.usbmodem* -b "$FQBN" firmware/claude_pet
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+./tools/flash.sh                              # compile → archive ELF → flash → restart daemon
 ```
 
-The daemon owns `/dev/cu.usbmodem*` exclusively, so it must be **unloaded** (not just
-stopped — the plist sets `KeepAlive`) before flashing, or esptool fails with what looks
-exactly like a bricked board. If the flasher still can't connect: hold **BOOT**, tap
-**RESET**, release BOOT, retry.
+`tools/flash.sh` handles the whole dance: it compiles, files the exact ELF away under
+`firmware/build-archive/` (so any future panic backtrace stays symbolizable), boots the
+daemon **out** (it owns `/dev/cu.usbmodem*` exclusively and the plist sets `KeepAlive`, so
+merely stopping it isn't enough — esptool would fail looking exactly like a bricked board),
+uploads, and bootstraps the daemon back. If the flasher still can't connect: hold **BOOT**,
+tap **RESET**, release BOOT, retry.
 
 ## Host bridge
 
@@ -126,7 +130,8 @@ synthetic events can't reach — rebind to an ordinary chord.
 | `firmware/claude_pet` | the sketch — pet state machine, touch UI, swipe cards, clock, diag ring |
 | `firmware/claude_pet/src/board_compat.*` | the port: shims the `M5StickCPlus.h` API onto this board |
 | `bridge/src/cc_buddy_bridge` | daemon, hooks, serial transport, voice trigger, read policy |
-| `DESIGN.md` | architecture, board facts, port map, and the gotchas worth knowing |
+| `tools/flash.sh` | compile + ELF archive + daemon-safe flash in one step |
+| `DESIGN.md` | architecture, board facts, port map, disconnect runbook, and the gotchas worth knowing |
 
 ## Licenses
 
