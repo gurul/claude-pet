@@ -71,10 +71,14 @@ def build_heartbeat(state: State, msg: Optional[str] = None, codec: Optional[str
     if state.is_celebrating:
         snapshot["completed"] = True
     if pending is not None:
+        import os
         snapshot["prompt"] = {
             "id": pending.tool_use_id,  # tool_use_id is ASCII by construction
             "tool": sanitize_for_stick(pending.tool_name, codec),
             "hint": sanitize_for_stick(truncate_utf8_bytes(pending.hint, 60), codec),
+            # cwd basename: which session is asking. The full path stays
+            # host-side; the card only needs the repo name.
+            "sess": sanitize_for_stick(os.path.basename(pending.cwd or "") or "?", codec),
         }
     return snapshot
 

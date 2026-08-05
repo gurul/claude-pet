@@ -770,6 +770,7 @@ static CardPhase   cardPhase = CARD_REST;
 static TFT_eSprite cardSpr(&M5.Lcd);
 static float cardX = 0, cardVel = 0;
 static int   cardGrabX = 0;
+static int   cardGrabY = 0;   // for the swipe-up focus gesture
 static bool  cardTouchPrev = false;
 static bool  cardArmed = false;        // past-threshold beep latch
 const int    CARD_W = 210, CARD_H = 80;
@@ -819,6 +820,14 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
   g->setCursor(ox + 10, oy + 8);
   g->print(tama.promptTool);
   g->setTextSize(1);
+  // Which session is asking — cwd basename, top-right. With several
+  // concurrent sessions the cards queue, and this is how you tell them apart.
+  if (tama.promptSess[0]) {
+    int sw = (int)strlen(tama.promptSess) * 6;
+    g->setTextColor(p.textDim, PANEL);
+    g->setCursor(ox + CARD_W - 10 - sw, oy + 6);
+    g->print(tama.promptSess);
+  }
 
   // Hint wraps at 31 chars to two lines under the tool name
   g->setTextColor(p.textDim, PANEL);
@@ -1250,6 +1259,7 @@ void loop() {
           && tdown && !cardTouchPrev && M5.touchY() >= CARD_BAND_Y) {
         cardPhase = CARD_DRAG;
         cardGrabX = M5.touchX() - (int)cardX;   // grab mid-snap without a jump
+        cardGrabY = M5.touchY();
         cardVel = 0;
         wake();
       }
@@ -1263,6 +1273,20 @@ void loop() {
           cardArmed = past;
           lastInteractMs = millis();
         } else {                               // release
+          // Swipe UP = "show me": raise that session's terminal on the Mac.
+          // NOT a decision — the card snaps back and stays pending. Only
+          // counts when the drag was clearly vertical, so a sloppy
+          // approve/deny swipe can't turn into a window switch.
+          int dyUp = cardGrabY - M5.touchY();
+          if (dyUp > 50 && fabsf(cardX) < CARD_COMMIT * 0.5f) {
+            char fc[80];
+            snprintf(fc, sizeof(fc), "{\"cmd\":\"focus\",\"id\":\"%s\"}", tama.promptId);
+            sendCmd(fc);
+            diagLog("card focus swipe");
+            beep(1500, 25);
+            cardPhase = CARD_SNAP;
+            cardArmed = false;
+          } else {
           bool commit = fabsf(cardX) > CARD_COMMIT || fabsf(cardVel) > 10.0f;
           if (commit) {
             float m = fabsf(cardX) > 2.0f ? cardX : cardVel;
@@ -1275,6 +1299,7 @@ void loop() {
             cardPhase = CARD_SNAP;
           }
           cardArmed = false;
+          }
         }
       }
     }

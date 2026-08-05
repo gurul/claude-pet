@@ -86,6 +86,8 @@ class Daemon:
         self._status_sent_at: Optional[float] = None
         self._status_missed = 0
         self._ack_escalation = 0   # consecutive missed-ack episodes
+        # tool_use_id -> session cwd, for the card's swipe-up focus action.
+        self._pending_cwds: dict[str, str] = {}
         # transcript_path → hash of the last assistant content we emitted as an
         # entry. Used to distinguish "fresh turn" from "re-read old content"
         # when the transcript file hasn't been flushed yet.
@@ -488,7 +490,7 @@ class Daemon:
             return {"ok": True}
 
         decision, source, elapsed = await self._await_stick_decision(
-            session_id, tool_use_id, tool_name, hint)
+            session_id, tool_use_id, tool_name, hint, cwd=req.get("cwd") or "")
         self.audit.record(
             **audit_kwargs, decision=decision, source=source, elapsed_s=elapsed,
         )
@@ -496,6 +498,7 @@ class Daemon:
 
     async def _await_stick_decision(
         self, session_id: str, tool_use_id: str, tool_name: str, hint: str,
+        cwd: str = "",
     ) -> tuple[str, str, float]:
         """Surface a prompt card on the stick and block until it is swiped
         (or times out). Returns (decision, source, elapsed_s); timeout maps
@@ -504,7 +507,8 @@ class Daemon:
             "permission request: tool=%s id=%s hint=%r waiting up to %.0fs",
             tool_name, tool_use_id, hint[:80], PERMISSION_WAIT_SECS,
         )
-        pending = self.state.permission_pending(session_id, tool_use_id, tool_name, hint)
+        pending = self.state.permission_pending(session_id, tool_use_id, tool_name, hint, cwd=cwd)
+        self._pending_cwds[tool_use_id] = pending.cwd
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._permission_futures[tool_use_id] = fut
         source = "stick"
@@ -527,6 +531,7 @@ class Daemon:
                 source = "timeout"
         finally:
             self._permission_futures.pop(tool_use_id, None)
+            self._pending_cwds.pop(tool_use_id, None)
             self.state.permission_resolved(tool_use_id)
             await self._push_heartbeat()
         return decision, source, elapsed
@@ -558,7 +563,7 @@ class Daemon:
         home = str(Path.home())
         shown = "~" + path[len(home):] if path.startswith(home) else path
         decision, source, elapsed = await self._await_stick_decision(
-            session_id, tool_use_id, "Read", shown)
+            session_id, tool_use_id, "Read", shown, cwd=cwd)
         if decision == "allow" and scope is not None:
             self._read_scopes.add(scope)
             log.info("read scope granted for this daemon's lifetime: %s", scope)
@@ -591,6 +596,15 @@ class Daemon:
                         "  pre-reset event: %s", ev)
             return
         cmd = obj.get("cmd")
+        if cmd == "focus":
+            # Swipe UP on the permission card: raise the terminal of the
+            # session that is asking. The card stays pending — this is a
+            # look-before-you-decide action, not a decision.
+            from .focus_terminal import focus_session_terminal
+            cwd = self._pending_cwds.get(str(obj.get("id") or ""), "")
+            log.info("focus: requested for %r", cwd or "(unknown session)")
+            asyncio.create_task(focus_session_terminal(cwd))
+            return
         if cmd == "key":
             # Swipe-down on the pet → Enter on the host.
             if self._voice is None:

@@ -16,6 +16,10 @@ class PendingPermission:
     hint: str
     session_id: str
     issued_at: float  # monotonic seconds
+    # Where the session lives — cwd basename goes on the card face so the
+    # human knows WHICH session is asking, and the full cwd drives the
+    # swipe-up focus-terminal action.
+    cwd: str = ""
 
 
 @dataclass
@@ -95,12 +99,19 @@ class State:
         tool_use_id: str,
         tool_name: str,
         hint: str,
+        cwd: str = "",
     ) -> PendingPermission:
+        # Fall back to the session's registered cwd when the hook didn't carry
+        # one (synthetic prompts, older hook versions).
+        if not cwd:
+            sess = self.sessions.get(session_id)
+            cwd = getattr(sess, "cwd", None) or ""
         p = PendingPermission(
             tool_use_id=tool_use_id,
             tool_name=tool_name,
             hint=hint,
             session_id=session_id,
+            cwd=cwd,
             issued_at=time.monotonic(),
         )
         s = self.sessions.get(session_id)
