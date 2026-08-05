@@ -137,11 +137,6 @@ uint8_t buddySpeciesCount() { return N_SPECIES; }
 
 uint8_t buddySpeciesIdx() { return currentSpeciesIdx; }
 
-void buddyNextSpecies() {
-  currentSpeciesIdx = (currentSpeciesIdx + 1) % N_SPECIES;
-  speciesIdxSave(currentSpeciesIdx);
-}
-
 // Only redraw when tickCount actually changes — animations run at TICK_MS
 // (5 fps), the loop runs at 60 fps, and the redraw is identical between
 // ticks. Gating saves ~12× the fillRect + sprite-print work. State changes

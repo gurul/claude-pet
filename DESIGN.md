@@ -37,8 +37,8 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
                                              firmware (fork of claude-desktop-buddy)
                                              data.h NDJSON parser → TamaState → derive() → pet states
                                              touch: swipe card right=approve · left=deny ·
-                                             tap-left=next · tap-right=page · long-press=menu ·
-                                             petting the sprite=heart · scrub=dizzy
+                                             hold pet=dictate · swipe down=Enter ·
+                                             tap-left=next · tap-right=page
 ```
 
 ## Firmware port map (M5StickC Plus → FNK0104B)
@@ -49,7 +49,7 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
 | `M5.BtnA/BtnB` | `TouchBtn` compat class over FT6336U: left/right tap zones, same `wasReleased/pressedFor` API |
 | `M5.Imu` shake/face-down/orientation | dropped; dizzy = fast scrub gesture on pet, nap = tap-and-hold on sleeping pet; clock fixed portrait |
 | `M5.Rtc` | ESP32 system clock (`settimeofday` from bridge `{"time":[...]}` sync) |
-| `M5.Axp` brightness/power/battery | LEDC PWM on GPIO45; battery = `analogReadMilliVolts(9)*2`; power-off menu item → backlight off |
+| `M5.Axp` brightness/power/battery | LEDC PWM on GPIO45; battery = `analogReadMilliVolts(9)*2`; power off → backlight off |
 | `M5.Beep` | stub (later: ES8311 I2S chirps) |
 | red LED GPIO10 | WS2812 GPIO42 via `neopixelWrite()` — attention=pulsing orange, heart=pink, celebrate=rainbow |
 | BLE bridge | kept as-is (ESP32 BLE works on S3) |
@@ -131,7 +131,7 @@ self-heal — the watchdog reboots within 15s.
 
 - **A — display bring-up:** sketch compiles under arduino-cli, buddy idle animation renders correctly
   (colors, inversion), demo mode cycles states. Flash + visual verify.
-- **B — input port:** touch buttons, petting/scrub gestures, menus, approval screen at 240×320.
+- **B — input port:** touch buttons, gestures, approval screen at 240×320.
 - **C — host bridge:** vendored cc-buddy-bridge + `serial_transport.py` (pyserial), venv install,
   hook installation into `~/.claude/settings.json` (with user approval), end-to-end verify.
 

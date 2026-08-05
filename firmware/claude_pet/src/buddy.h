@@ -12,7 +12,6 @@ class TFT_eSPI;
 void buddyRenderTo(TFT_eSPI* tgt, uint8_t personaState);
 void buddySetSpecies(const char* name);
 void buddySetSpeciesIdx(uint8_t idx);
-void buddyNextSpecies();
 void buddySetPeek(bool peek);
 uint8_t buddySpeciesIdx();
 uint8_t buddySpeciesCount();

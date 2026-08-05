@@ -39,11 +39,8 @@ uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
 unsigned long t = 0;
 
-// Menu
-bool    menuOpen    = false;
-uint8_t menuSel     = 0;
 uint8_t brightLevel = 4;           // 0..4 → ScreenBreath 20..100
-bool    btnALong    = false;
+bool    btnALong    = false;       // swallow long presses (hold is a no-op)
 
 enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
@@ -61,24 +58,6 @@ bool     swallowBtnB = false;
 bool     buddyMode = false;
 bool     gifAvailable = false;
 const uint8_t SPECIES_GIF = 0xFF;   // species NVS sentinel: use the installed GIF
-
-// Cycle GIF (if installed) → ASCII species 0..N-1 → GIF. Persisted to the
-// existing "species" NVS key; 0xFF means GIF mode.
-static void nextPet() {
-  uint8_t n = buddySpeciesCount();
-  if (!buddyMode) {                          // GIF → species 0
-    buddyMode = true;
-    buddySetSpeciesIdx(0);
-    speciesIdxSave(0);
-  } else if (buddySpeciesIdx() + 1 >= n && gifAvailable) {  // last species → GIF
-    buddyMode = false;
-    speciesIdxSave(SPECIES_GIF);
-  } else {                                   // species i → species i+1
-    buddyNextSpecies();
-  }
-  characterInvalidate();
-  if (buddyMode) buddyInvalidate();
-}
 uint32_t wakeTransitionUntil = 0;
 const uint32_t SCREEN_OFF_MS = 30000;
 
@@ -118,8 +97,6 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)"\n", 1);
 }
 const uint8_t INFO_PAGES = 6;
-const uint8_t INFO_PG_BUTTONS = 1;
-const uint8_t INFO_PG_CREDITS = 5;
 
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
@@ -133,208 +110,12 @@ void applyDisplayMode() {
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
 
-const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "close" };
-const uint8_t MENU_N = 6;
-
-bool    settingsOpen = false;
-uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
-
-bool    resetOpen = false;
-uint8_t resetSel  = 0;
-const char* resetItems[] = { "delete char", "factory reset", "back" };
-const uint8_t RESET_N = 3;
-static uint32_t resetConfirmUntil = 0;
-static uint8_t  resetConfirmIdx = 0xFF;
-
-static void applySetting(uint8_t idx) {
-  Settings& s = settings();
-  switch (idx) {
-    case 0:
-      brightLevel = (brightLevel + 1) % 5;
-      applyBrightness();
-      return;
-    case 1: s.sound = !s.sound; break;
-    case 2:
-      // BT toggle is a stored preference only — BLE stays live. Turning
-      // BLE off cleanly would require tearing down the BLE stack which
-      // the Arduino BLE library doesn't do reliably. If we need a
-      // hard-off someday, stop advertising via BLEDevice::getAdvertising().
-      s.bt = !s.bt;
-      break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
-    case 4: s.led = !s.led; break;
-    case 5: s.hud = !s.hud; break;
-    case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
-  }
-  settingsSave();
-}
-
-// Tap-twice confirm: first tap arms (label flips to "really?"), second
-// within 3s executes. Scrolling away clears the arm.
-static void applyReset(uint8_t idx) {
-  uint32_t now = millis();
-  bool armed = (resetConfirmIdx == idx) && (int32_t)(now - resetConfirmUntil) < 0;
-
-  if (idx == 2) { resetOpen = false; return; }
-
-  if (!armed) {
-    resetConfirmIdx = idx;
-    resetConfirmUntil = now + 3000;
-    beep(1400, 60);
-    return;
-  }
-
-  beep(800, 200);
-  if (idx == 0) {
-    // delete char: wipe /characters/, reboot into ASCII mode
-    File d = LittleFS.open("/characters");
-    if (d && d.isDirectory()) {
-      File e;
-      while ((e = d.openNextFile())) {
-        char path[80];
-        snprintf(path, sizeof(path), "/characters/%s", e.name());
-        if (e.isDirectory()) {
-          File f;
-          while ((f = e.openNextFile())) {
-            char fp[128];
-            snprintf(fp, sizeof(fp), "%s/%s", path, f.name());
-            f.close();
-            LittleFS.remove(fp);
-          }
-          e.close();
-          LittleFS.rmdir(path);
-        } else {
-          e.close();
-          LittleFS.remove(path);
-        }
-      }
-      d.close();
-    }
-  } else {
-    // factory reset: NVS namespace wipe + filesystem format + BLE bonds.
-    // Clears stats, owner, petname, species, settings, GIF characters,
-    // and any stored LTKs so the next desktop has to re-pair.
-    _prefs.begin("buddy", false);
-    _prefs.clear();
-    _prefs.end();
-    LittleFS.format();
-    bleClearBonds();
-  }
-  delay(300);
-  ESP.restart();
-}
-
-// Footer hint row inside a menu panel: "<downLbl> ↓  <rightLbl> →" with
-// pixel triangles. Panels add MENU_HINT_H to height and call this at bottom.
-const int MENU_HINT_H = 14;
-static void drawMenuHints(const Palette& p, int mx, int mw, int hy,
-                          const char* downLbl = "A", const char* rightLbl = "B") {
-  spr.drawFastHLine(mx + 6, hy - 4, mw - 12, p.textDim);
-  spr.setTextColor(p.textDim, PANEL);
-  // 6px/glyph at size 1; triangle goes 4px after the label ends
-  int x = mx + 8;
-  spr.setCursor(x, hy); spr.print(downLbl);
-  x += strlen(downLbl) * 6 + 4;
-  spr.fillTriangle(x, hy + 1, x + 6, hy + 1, x + 3, hy + 6, p.textDim);
-  x = mx + mw / 2 + 4;
-  spr.setCursor(x, hy); spr.print(rightLbl);
-  x += strlen(rightLbl) * 6 + 4;
-  spr.fillTriangle(x, hy, x, hy + 6, x + 5, hy + 3, p.textDim);
-}
-
-static void drawSettings() {
-  const Palette& p = characterPalette();
-  int mw = 118, mh = 16 + SETTINGS_N * 14 + MENU_HINT_H;
-  int mx = (W - mw) / 2, my = (H - mh) / 2;
-  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
-  spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
-  spr.setTextSize(1);
-  Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
-  for (int i = 0; i < SETTINGS_N; i++) {
-    bool sel = (i == settingsSel);
-    spr.setTextColor(sel ? p.text : p.textDim, PANEL);
-    spr.setCursor(mx + 6, my + 8 + i * 14);
-    spr.print(sel ? "> " : "  ");
-    spr.print(settingsItems[i]);
-    spr.setCursor(mx + mw - 36, my + 8 + i * 14);
-    spr.setTextColor(p.textDim, PANEL);
-    if (i == 0) {
-      spr.printf("%u/4", brightLevel);
-    } else if (i >= 1 && i <= 5) {
-      spr.setTextColor(vals[i-1] ? GREEN : p.textDim, PANEL);
-      spr.print(vals[i-1] ? " on" : "off");
-    } else if (i == 6) {
-      static const char* const RN[] = { "auto", "port", "land" };
-      spr.print(RN[s.clockRot]);
-    } else if (i == 7) {
-      uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
-      uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
-      spr.printf("%u/%u", pos, total);
-    }
-  }
-  drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
-}
-
-static void drawReset() {
-  const Palette& p = characterPalette();
-  int mw = 118, mh = 16 + RESET_N * 14 + MENU_HINT_H;
-  int mx = (W - mw) / 2, my = (H - mh) / 2;
-  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
-  spr.drawRoundRect(mx, my, mw, mh, 4, HOT);
-  spr.setTextSize(1);
-  for (int i = 0; i < RESET_N; i++) {
-    bool sel = (i == resetSel);
-    spr.setTextColor(sel ? p.text : p.textDim, PANEL);
-    spr.setCursor(mx + 6, my + 8 + i * 14);
-    spr.print(sel ? "> " : "  ");
-    bool armed = (i == resetConfirmIdx) &&
-                 (int32_t)(millis() - resetConfirmUntil) < 0;
-    if (armed) spr.setTextColor(HOT, PANEL);
-    spr.print(armed ? "really?" : resetItems[i]);
-  }
-  drawMenuHints(p, mx, mw, my + mh - 12);
-}
-
-void menuConfirm() {
-  switch (menuSel) {
-    case 0: settingsOpen = true; menuOpen = false; settingsSel = 0; break;
-    case 1: M5.Axp.PowerOff(); break;
-    case 2:
-    case 3:
-      menuOpen = false;
-      displayMode = DISP_INFO;
-      infoPage = (menuSel == 2) ? INFO_PG_BUTTONS : INFO_PG_CREDITS;
-      applyDisplayMode();
-      characterInvalidate();
-      break;
-    case 4: dataSetDemo(!dataDemo()); break;
-    case 5: menuOpen = false; characterInvalidate(); break;
-  }
-}
-
-void drawMenu() {
-  const Palette& p = characterPalette();
-  int mw = 118, mh = 16 + MENU_N * 14 + MENU_HINT_H;
-  int mx = (W - mw) / 2, my = (H - mh) / 2;
-  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
-  spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
-  spr.setTextSize(1);
-  for (int i = 0; i < MENU_N; i++) {
-    bool sel = (i == menuSel);
-    spr.setTextColor(sel ? p.text : p.textDim, PANEL);
-    spr.setCursor(mx + 6, my + 8 + i * 14);
-    spr.print(sel ? "> " : "  ");
-    spr.print(menuItems[i]);
-    if (i == 4) spr.print(dataDemo() ? "  on" : "  off");
-  }
-  drawMenuHints(p, mx, mw, my + mh - 12);
-}
+// The on-device menu (and its settings/reset panels) is gone — customization
+// lives host-side in the CLI (`cc-buddy-bridge species`, matchers.toml), and
+// a 2.8" panel poked with a fingertip was a bad settings UI that suspended
+// the gestures that are the point of the device. Settings persist in NVS and
+// keep whatever values they last had; the structs stay for the render paths
+// that read them.
 
 // Clock orientation: gravity along the in-plane X axis means the stick is
 // on its side. Signed counter for hysteresis on both transitions — same
@@ -426,7 +207,7 @@ static const char* clockMeridiem() { return _clkTm.Hours < 12 ? "AM" : "PM"; }
 // pet's overlay particles (hearts/Zzz) is possible and harmless; the clock
 // wins for one frame and the particles are transient.
 static void drawMiniClock() {
-  if (!dataRtcValid() || menuOpen || settingsOpen || resetOpen) return;
+  if (!dataRtcValid()) return;
   if (displayMode != DISP_NORMAL) return;
   const Palette& p = characterPalette();
   char mc[12];
@@ -586,8 +367,8 @@ void drawInfo() {
     ln("right to approve.");
     y += 6;
     spr.setTextColor(p.textDim, p.bg);
-    ln("18 species. Settings");
-    ln("> ascii pet to cycle.");
+    ln("18 species. Set via");
+    ln("cc-buddy-bridge species.");
 
   } else if (infoPage == 1) {
     _infoHeader(p, y, "TOUCH", infoPage);
@@ -595,16 +376,14 @@ void drawInfo() {
     spr.setTextColor(GREEN, p.bg);     ln("    approve prompt"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("swipe card left");
     spr.setTextColor(HOT, p.bg);       ln("    deny prompt"); y += 4;
+    spr.setTextColor(p.text, p.bg);    ln("hold the pet");
+    spr.setTextColor(p.textDim, p.bg); ln("    push-to-talk"); y += 4;
+    spr.setTextColor(p.text, p.bg);    ln("swipe down");
+    spr.setTextColor(p.textDim, p.bg); ln("    press Enter"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("tap bottom-left");
     spr.setTextColor(p.textDim, p.bg); ln("    next screen"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("tap bottom-right");
-    spr.setTextColor(p.textDim, p.bg); ln("    next page"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("hold bottom-left");
-    spr.setTextColor(p.textDim, p.bg); ln("    menu"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("tap the pet");
-    spr.setTextColor(p.textDim, p.bg); ln("    pet it (heart)");
-    spr.setTextColor(p.text, p.bg);    ln("scrub the pet");
-    spr.setTextColor(p.textDim, p.bg); ln("    dizzy!");
+    spr.setTextColor(p.textDim, p.bg); ln("    next page");
 
   } else if (infoPage == 2) {
     _infoHeader(p, y, "CLAUDE", infoPage);
@@ -992,7 +771,6 @@ static void drawPetHowTo(const Palette& p) {
   ln(p.textDim, "any button = wake"); gap();
 
   ln(p.textDim, "A: screens  B: page");
-  ln(p.textDim, "hold A: menu");
 }
 
 void drawPet() {
@@ -1179,7 +957,7 @@ void loop() {
   // Drained during a prompt — the swipe card's band overlaps the pet
   // zone, and a card drag must not read as a scrub.
   static bool voiceHold = false;
-  bool gesturesLive = !menuOpen && !settingsOpen && !resetOpen && !screenOff && !tama.promptId[0];
+  bool gesturesLive = !screenOff && !tama.promptId[0];
   if (gesturesLive) {
     if (M5.petHoldStarted()) {
       wake();
@@ -1229,7 +1007,6 @@ void loop() {
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
-      menuOpen = settingsOpen = resetOpen = false;
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
@@ -1344,15 +1121,8 @@ void loop() {
     }
   }
 
-  // The on-device menu is retired. Everything it offered — species, settings,
-  // demo mode, factory reset — is host-side territory now, reachable from the
-  // CLI over the same serial link (see `cc-buddy-bridge species`). A 2.8"
-  // panel you poke with a fingertip is a bad settings UI, and every overlay
-  // it opened also suspended the gestures that are the point of the device.
-  //
-  // A long press on the strip therefore does nothing. The drawing code for
-  // menu/settings/reset is left compiled but unreachable; deleting it is a
-  // separate cleanup, and leaving it costs nothing at 19% flash.
+  // Long press is a deliberate no-op (the menu it used to open is gone),
+  // but it must still be latched so its release doesn't fire the tap action.
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
   }
@@ -1377,15 +1147,6 @@ void loop() {
     else
     if (tama.promptId[0]) {
       // swipe card owns decisions — swallow strip touches during a prompt
-    } else if (resetOpen) {
-      beep(2400, 30);
-      applyReset(resetSel);
-    } else if (settingsOpen) {
-      beep(2400, 30);
-      applySetting(settingsSel);
-    } else if (menuOpen) {
-      beep(2400, 30);
-      menuConfirm();
     } else if (displayMode == DISP_INFO) {
       beep(2400, 30);
       infoPage = (infoPage + 1) % INFO_PAGES;
@@ -1485,9 +1246,6 @@ void loop() {
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
     else if (settings().hud) drawHUD();
-    if (resetOpen) drawReset();
-    else if (settingsOpen) drawSettings();
-    else if (menuOpen) drawMenu();
     drawMiniClock();
     spr.pushSprite(0, 0);
   }
