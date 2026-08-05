@@ -420,6 +420,24 @@ static uint8_t clockHour12() {
 }
 static const char* clockMeridiem() { return _clkTm.Hours < 12 ? "AM" : "PM"; }
 
+// Small always-on clock, top-left of the normal pet screen. Drawn LAST each
+// frame (just before pushSprite) because the buddy strip clears y<126 full
+// width — anything painted earlier in the corner is erased. Overlap with the
+// pet's overlay particles (hearts/Zzz) is possible and harmless; the clock
+// wins for one frame and the particles are transient.
+static void drawMiniClock() {
+  if (!dataRtcValid() || menuOpen || settingsOpen || resetOpen) return;
+  if (displayMode != DISP_NORMAL) return;
+  const Palette& p = characterPalette();
+  char mc[12];
+  snprintf(mc, sizeof(mc), "%u:%02u %s", clockHour12(), _clkTm.Minutes, clockMeridiem());
+  spr.setTextSize(2);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(4, 4);
+  spr.print(mc);
+  spr.setTextSize(1);
+}
+
 static void drawClock() {
   const Palette& p = characterPalette();
   char hm[6]; snprintf(hm, sizeof(hm), "%2u:%02u", clockHour12(), _clkTm.Minutes);
@@ -1375,12 +1393,11 @@ void loop() {
   // applyDisplayMode() so the next mode-switch isn't visually offset.
   diagPhase(DP_CLOCK);
   clockRefreshRtc();   // 1Hz internal throttle; also caches _onUsb
-  // Show the clock when nothing is happening — bridge heartbeat alone
-  // doesn't count as activity (it's the only way to get the RTC synced).
-  bool clocking = displayMode == DISP_NORMAL
-               && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
-               && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
-               && dataRtcValid() && _onUsb;
+  // The full-screen clock takeover is retired (owner request: the pet should
+  // ALWAYS be visible). Time now lives as a small always-on overlay in the
+  // top-left of the normal screen — see drawMiniClock(). The takeover and
+  // landscape machinery are kept compiled but permanently gated off.
+  bool clocking = false;
   if (clocking) clockUpdateOrient();
   else { clockOrient = 0; orientFrames = 0; paintedOrient = 0; }
   bool landscapeClock = clocking && clockOrient != 0;
@@ -1457,6 +1474,7 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
+    drawMiniClock();
     spr.pushSprite(0, 0);
   }
 
