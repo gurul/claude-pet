@@ -6,7 +6,14 @@
 M5Compat M5;
 
 // ---- WS2812 ----
+// Skip unchanged writes. main.cpp calls this every loop iteration (~17/s), and
+// each call is a full RMT transaction bit-banging the WS2812 protocol — pure
+// waste when the colour is identical, which it is the overwhelming majority of
+// the time. Also keeps the RMT peripheral idle instead of continuously driven.
 void ledSet(uint8_t r, uint8_t g, uint8_t b) {
+  static uint8_t lr = 0xFF, lg = 0xFF, lb = 0xFF;
+  if (r == lr && g == lg && b == lb) return;
+  lr = r; lg = g; lb = b;
   rgbLedWrite(PIN_STATUS_LED, r, g, b);
 }
 

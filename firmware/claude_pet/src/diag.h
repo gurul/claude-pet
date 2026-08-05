@@ -167,16 +167,28 @@ inline void diagInit() {
 // Subscribe loop() to the task watchdog so a hang reboots (and is therefore
 // reportable) instead of hanging silently forever.
 inline void diagWatchdogBegin() {
+  // The ESP-IDF build this core ships has CONFIG_ESP_TASK_WDT_INIT=y, so the
+  // TWDT is ALREADY running before we get here: 5s timeout, watching the CPU0
+  // idle task, and (by default) not panicking — it just logs warnings nobody
+  // sees. So reconfigure rather than init; calling init logs a red
+  // "TWDT already initialized" error and changes nothing.
+  //
+  // idle_core_mask = 0 unsubscribes the idle tasks deliberately. The render
+  // loop legitimately keeps a core busy (a full 240x320 pushSprite is ~31ms of
+  // SPI), and a starved idle task is not a fault worth rebooting for. We only
+  // want to know when OUR loop stops.
   esp_task_wdt_config_t cfg = {
     .timeout_ms = DIAG_WDT_SECS * 1000,
-    .idle_core_mask = 0,       // don't watch idle tasks; only our loop
-    .trigger_panic = true,     // panic → reset → reason is TASK_WDT
+    .idle_core_mask = 0,
+    .trigger_panic = true,     // panic → reset → next boot reports TASK_WDT
   };
-  // The Arduino core may already have initialised the TWDT; reconfigure is
-  // fine, and ESP_ERR_INVALID_STATE just means "already running".
-  esp_err_t e = esp_task_wdt_init(&cfg);
-  if (e == ESP_ERR_INVALID_STATE) esp_task_wdt_reconfigure(&cfg);
-  esp_task_wdt_add(NULL);      // NULL = the current (loop) task
+  esp_err_t rc = esp_task_wdt_reconfigure(&cfg);
+  esp_err_t ra = esp_task_wdt_add(NULL);   // NULL = the current (loop) task
+  // Record it: a silently-failed subscription would mean hangs go unreported
+  // forever, and we would be back to staring at a frozen screen.
+  diagLog("wdt cfg=%d add=%d %ds", (int)rc, (int)ra, DIAG_WDT_SECS);
+  Serial.printf("[diag] watchdog: reconfigure=%s add=%s timeout=%ds\n",
+                esp_err_to_name(rc), esp_err_to_name(ra), DIAG_WDT_SECS);
 }
 
 inline void diagWatchdogFeed() { esp_task_wdt_reset(); }
