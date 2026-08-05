@@ -83,6 +83,10 @@ class TouchButton {
   bool wasPressed() const { return _down && !_prev; }
   bool wasReleased()const { return !_down && _prev; }
   bool pressedFor(uint32_t ms) const { return _down && (millis() - _downAt) >= ms; }
+  // Withdraw the current press without generating a release edge. Used when a
+  // touch that started in the button strip turns out to be a swipe: the
+  // gesture consumes it, and the button must not also fire on lift.
+  void cancel() { _down = false; _prev = false; }
  private:
   bool _down = false, _prev = false;
   uint32_t _downAt = 0;

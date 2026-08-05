@@ -140,12 +140,18 @@ void M5Compat::update() {
   M5.BtnA.feed(inStrip && _tx < 120, now);
   M5.BtnB.feed(inStrip && _tx >= 120, now);
 
-  bool inPet = down && _ty < 250;
-  if (inPet && !_petTouch) {              // touch-down in pet area
+  // Gestures start ANYWHERE on the panel, including the button strip. The
+  // screen is small and a swipe is a whole-hand motion — requiring it to begin
+  // above y=250 meant it silently failed from wherever the finger happened to
+  // land. Taps in the strip still work as buttons: the button state machine
+  // runs normally and is only withdrawn (cancel()) if the press actually
+  // becomes a swipe.
+  bool inPet = down;
+  if (inPet && !_petTouch) {              // touch-down anywhere
     _petTouch = true;
     _petDownMs = now; _petDownX = _tx; _petDownY = _ty;
     _lastX = _tx; _dir = 0; _reversals = 0; _swipeFired = false;
-  } else if (inPet && _petTouch) {        // drag: watch for direction flips
+  } else if (down && _petTouch) {         // drag continues — see zone note below
     // A steady 600ms press becomes a hold (push-to-talk); once a hold is
     // active, scrub detection is off — finger wobble mid-dictation must
     // not fire dizzy.
@@ -153,6 +159,8 @@ void M5Compat::update() {
         && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20) {
       _holdActive = true;
       _evHoldStart = true;
+      M5.BtnA.cancel();
+      M5.BtnB.cancel();
     }
     if (!_holdActive) {
       // Downward swipe → Enter. Checked before scrub so a deliberate vertical
@@ -171,6 +179,10 @@ void M5Compat::update() {
         _evSwipeDown = true;
         _swipeFired = true;      // latch: one Enter per press
         _reversals = 0;          // and it is definitively not a scrub
+        // The gesture consumes this press — a swipe that began in (or ended
+        // in) the button strip must not also cycle screens on lift.
+        M5.BtnA.cancel();
+        M5.BtnB.cancel();
       }
       if (!_swipeFired) {
         int dx = _tx - _lastX;
@@ -193,18 +205,20 @@ void M5Compat::update() {
       if (held < 450 && abs(_tx - _petDownX) < 20 && abs(_ty - _petDownY) < 20)
         _evTap = true;
     }
-  } else if (!inPet) {
-    // Finger left the pet zone. A hold must NOT end here while the finger is
-    // still down: touch coordinates drift, and a single sample landing at
-    // y>=250 used to end a push-to-talk hold the instant it began — the board
-    // reported "hold released after 0.0s", so VoiceFlow keyed down and up with
-    // nothing between and recorded silence. Only a real release ends a hold.
-    if (_holdActive) {
-      if (!down) { _holdActive = false; _evHoldEnd = true; }
-    } else {
-      _petTouch = false;
-    }
   }
+  // NOTE: the drag branch above tests `down`, not `inPet`, and there is
+  // deliberately no "finger left the pet zone" branch any more.
+  //
+  // A gesture that STARTS on the pet must keep tracking wherever the finger
+  // goes. The old code aborted it the moment y crossed 250 into the button
+  // strip, which silently made swipe-down impossible from most of the screen:
+  // the swipe needs 45px of travel, so a drag starting below y=204 hit the
+  // zone edge at only ~39px and was destroyed one sample before it qualified.
+  // That is why it "worked and then stopped" as the threshold moved — at 70px
+  // you had to start above y=179, at 45px above y=204, and nobody swipes from
+  // the top of the pet's head. It also killed holds on coordinate drift.
+  //
+  // Ending the gesture is now the release branch's job alone.
 }
 
 bool M5Compat::petTapped()   { bool e = _evTap;   _evTap = false;   return e; }
