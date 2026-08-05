@@ -38,7 +38,7 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
                                              data.h NDJSON parser → TamaState → derive() → pet states
                                              touch: swipe card right=approve · left=deny ·
                                              hold pet=dictate · swipe down=Enter ·
-                                             tap-left=next · tap-right=page
+                                             tap-right=scroll transcript
 ```
 
 ## Firmware port map (M5StickC Plus → FNK0104B)

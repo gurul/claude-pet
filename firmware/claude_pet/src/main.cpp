@@ -40,20 +40,13 @@ float        accelBaseline = 1.0f;
 unsigned long t = 0;
 
 uint8_t brightLevel = 4;           // 0..4 → ScreenBreath 20..100
-bool    btnALong    = false;       // swallow long presses (hold is a no-op)
 
-enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
-uint8_t displayMode = DISP_NORMAL;
-uint8_t infoPage = 0;
-uint8_t petPage = 0;
-const uint8_t PET_PAGES = 2;
 uint8_t msgScroll = 0;
 uint16_t lastLineGen = 0;
 char     lastPromptId[40] = "";
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
 bool     screenOff = false;
-bool     swallowBtnA = false;
 bool     swallowBtnB = false;
 bool     buddyMode = false;
 bool     gifAvailable = false;
@@ -96,18 +89,12 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
-const uint8_t INFO_PAGES = 6;
 
-void applyDisplayMode() {
-  bool peek = displayMode != DISP_NORMAL;
-  characterSetPeek(peek);
-  buddySetPeek(peek);
-  // Clear the whole sprite on mode switch. drawInfo/drawPet clear their
-  // own regions when they run, but when you switch FROM info/pet TO normal,
-  // those functions stop running and their stale pixels stay behind. Full
-  // clear is cheap and guarantees no leftovers between modes.
+// Full repaint: clear the sprite and let the character/buddy redraw from
+// scratch on the next tick. Used when an overlay (card, passkey) goes away.
+static void repaintAll() {
   spr.fillSprite(0x0000);
-  characterInvalidate();  // redraws character on next tick (text mode path)
+  characterInvalidate();
 }
 
 // The on-device menu (and its settings/reset panels) is gone — customization
@@ -208,7 +195,6 @@ static const char* clockMeridiem() { return _clkTm.Hours < 12 ? "AM" : "PM"; }
 // wins for one frame and the particles are transient.
 static void drawMiniClock() {
   if (!dataRtcValid()) return;
-  if (displayMode != DISP_NORMAL) return;
   const Palette& p = characterPalette();
   char mc[12];
   snprintf(mc, sizeof(mc), "%u:%02u %s", clockHour12(), _clkTm.Minutes, clockMeridiem());
@@ -311,20 +297,6 @@ bool checkShake() {
 
 
 
-// Persistent screen-level title row ("INFO  n/3") matching the PET header,
-// then a per-page section label below it. The fixed title is the cue that
-// B cycles pages here just like it does on PET.
-static void _infoHeader(const Palette& p, int& y, const char* section, uint8_t page) {
-  spr.setTextColor(p.text, p.bg);
-  spr.setCursor(4, y); spr.print("Info");
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(W - 28, y); spr.printf("%u/%u", page + 1, INFO_PAGES);
-  y += 12;
-  spr.setTextColor(p.body, p.bg);
-  spr.setCursor(4, y); spr.print(section);
-  y += 12;
-}
-
 void drawPasskey() {
   const Palette& p = characterPalette();
   spr.fillSprite(p.bg);
@@ -338,166 +310,6 @@ void drawPasskey() {
   spr.setCursor((W - 18 * 6) / 2, 110);
   spr.print(b);
 }
-
-void drawInfo() {
-  const Palette& p = characterPalette();
-  const int TOP = 70;
-  spr.fillRect(0, TOP, W, H - TOP, p.bg);
-  spr.setTextSize(1);
-  int y = TOP + 2;
-  auto ln = [&](const char* fmt, ...) {
-    char b[32]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof(b), fmt, a); va_end(a);
-    spr.setCursor(4, y); spr.print(b); y += 8;
-  };
-
-  if (infoPage == 0) {
-    _infoHeader(p, y, "ABOUT", infoPage);
-    spr.setTextColor(p.textDim, p.bg);
-    ln("I watch your Claude");
-    ln("desktop sessions.");
-    y += 6;
-    ln("I sleep when nothing's");
-    ln("happening, wake when");
-    ln("you start working,");
-    ln("get impatient when");
-    ln("approvals pile up.");
-    y += 6;
-    spr.setTextColor(p.text, p.bg);
-    ln("Swipe the prompt card");
-    ln("right to approve.");
-    y += 6;
-    spr.setTextColor(p.textDim, p.bg);
-    ln("18 species. Set via");
-    ln("cc-buddy-bridge species.");
-
-  } else if (infoPage == 1) {
-    _infoHeader(p, y, "TOUCH", infoPage);
-    spr.setTextColor(p.text, p.bg);    ln("swipe card right");
-    spr.setTextColor(GREEN, p.bg);     ln("    approve prompt"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("swipe card left");
-    spr.setTextColor(HOT, p.bg);       ln("    deny prompt"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("hold the pet");
-    spr.setTextColor(p.textDim, p.bg); ln("    push-to-talk"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("swipe down");
-    spr.setTextColor(p.textDim, p.bg); ln("    press Enter"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("tap bottom-left");
-    spr.setTextColor(p.textDim, p.bg); ln("    next screen"); y += 4;
-    spr.setTextColor(p.text, p.bg);    ln("tap bottom-right");
-    spr.setTextColor(p.textDim, p.bg); ln("    next page");
-
-  } else if (infoPage == 2) {
-    _infoHeader(p, y, "CLAUDE", infoPage);
-    spr.setTextColor(p.textDim, p.bg);
-    ln("  sessions  %u", tama.sessionsTotal);
-    ln("  running   %u", tama.sessionsRunning);
-    ln("  waiting   %u", tama.sessionsWaiting);
-    y += 8;
-    spr.setTextColor(p.text, p.bg);
-    ln("LINK");
-    spr.setTextColor(p.textDim, p.bg);
-    ln("  via       %s", dataScenarioName());
-    ln("  ble       %s", !bleConnected() ? "-" : bleSecure() ? "encrypted" : "OPEN");
-    uint32_t age = (millis() - tama.lastUpdated) / 1000;
-    ln("  last msg  %lus", (unsigned long)age);
-    ln("  state     %s", stateNames[activeState]);
-
-  } else if (infoPage == 3) {
-    _infoHeader(p, y, "DEVICE", infoPage);
-
-    int vBat_mV = (int)(M5.Axp.GetBatVoltage() * 1000);
-    int iBat_mA = (int)M5.Axp.GetBatCurrent();
-    int vBus_mV = (int)(M5.Axp.GetVBusVoltage() * 1000);
-    int pct = (vBat_mV - 3200) / 10;   // (v-3.2)/(4.2-3.2)*100 = (v-3.2)*100 = (mv-3200)/10
-    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-    bool usb = vBus_mV > 4000;
-    bool charging = usb && iBat_mA > 1;
-    bool full = usb && vBat_mV > 4100 && iBat_mA < 10;
-
-    spr.setTextColor(p.text, p.bg);
-    spr.setTextSize(2);
-    spr.setCursor(4, y);
-    spr.printf("%d%%", pct);
-    spr.setTextSize(1);
-    spr.setTextColor(full ? GREEN : (charging ? HOT : p.textDim), p.bg);
-    spr.setCursor(60, y + 4);
-    spr.print(full ? "full" : (charging ? "charging" : (usb ? "usb" : "battery")));
-    y += 20;
-
-    spr.setTextColor(p.textDim, p.bg);
-    ln("  battery  %d.%02dV", vBat_mV/1000, (vBat_mV%1000)/10);
-    ln("  current  %+dmA", iBat_mA);
-    if (usb) ln("  usb in   %d.%02dV", vBus_mV/1000, (vBus_mV%1000)/10);
-    y += 8;
-
-    spr.setTextColor(p.text, p.bg);
-    ln("SYSTEM");
-    spr.setTextColor(p.textDim, p.bg);
-    if (ownerName()[0]) ln("  owner    %s", ownerName());
-    uint32_t up = millis() / 1000;
-    ln("  uptime   %luh %02lum", up / 3600, (up / 60) % 60);
-    ln("  heap     %uKB", ESP.getFreeHeap() / 1024);
-    ln("  bright   %u/4", brightLevel);
-    ln("  bt       %s", settings().bt ? (dataBtActive() ? "linked" : "on") : "off");
-    ln("  temp     %dC", (int)M5.Axp.GetTempInAXP192());
-
-  } else if (infoPage == 4) {
-    _infoHeader(p, y, "BLUETOOTH", infoPage);
-    bool linked = settings().bt && dataBtActive();
-
-    spr.setTextColor(linked ? GREEN : (settings().bt ? HOT : p.textDim), p.bg);
-    spr.setTextSize(2);
-    spr.setCursor(4, y);
-    spr.print(linked ? "linked" : (settings().bt ? "discover" : "off"));
-    spr.setTextSize(1);
-    y += 20;
-
-    spr.setTextColor(p.textDim, p.bg);
-    spr.setTextColor(p.text, p.bg);
-    ln("  %s", btName);
-    spr.setTextColor(p.textDim, p.bg);
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_BT);
-    ln("  %02X:%02X:%02X:%02X:%02X:%02X",
-       mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-    y += 8;
-
-    if (linked) {
-      uint32_t age = (millis() - tama.lastUpdated) / 1000;
-      ln("  last msg  %lus", (unsigned long)age);
-    } else if (settings().bt) {
-      spr.setTextColor(p.text, p.bg);
-      ln("TO PAIR");
-      spr.setTextColor(p.textDim, p.bg);
-      ln(" Open Claude desktop");
-      ln(" > Developer");
-      ln(" > Hardware Buddy");
-      y += 4;
-      ln(" auto-connects via BLE");
-    }
-
-  } else {
-    _infoHeader(p, y, "CREDITS", infoPage);
-    spr.setTextColor(p.textDim, p.bg);
-    ln("made by");
-    y += 4;
-    spr.setTextColor(p.text, p.bg);
-    ln("Felix Rieseberg");
-    y += 12;
-    spr.setTextColor(p.textDim, p.bg);
-    ln("source");
-    y += 4;
-    spr.setTextColor(p.text, p.bg);
-    ln("github.com/anthropics");
-    ln("/claude-desktop-buddy");
-    y += 12;
-    spr.setTextColor(p.textDim, p.bg);
-    ln("hardware");
-    y += 4;
-    ln("M5StickC Plus");
-    ln("ESP32 + AXP192");
-  }
-}
-
 
 // Greedy word-wrap into fixed-width rows. Continuation rows get a leading
 // space. Returns number of rows written.
@@ -675,125 +487,6 @@ static void drawApproval() {
   }
 }
 
-static void tinyHeart(int x, int y, bool filled, uint16_t col) {
-  if (filled) {
-    spr.fillCircle(x - 2, y, 2, col);
-    spr.fillCircle(x + 2, y, 2, col);
-    spr.fillTriangle(x - 4, y + 1, x + 4, y + 1, x, y + 5, col);
-  } else {
-    spr.drawCircle(x - 2, y, 2, col);
-    spr.drawCircle(x + 2, y, 2, col);
-    spr.drawLine(x - 4, y + 1, x, y + 5, col);
-    spr.drawLine(x + 4, y + 1, x, y + 5, col);
-  }
-}
-
-static void drawPetStats(const Palette& p) {
-  const int TOP = 70;
-  spr.fillRect(0, TOP, W, H - TOP, p.bg);
-  spr.setTextSize(1);
-  int y = TOP + 16;
-
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(6, y - 2); spr.print("mood");
-  uint8_t mood = statsMoodTier();
-  uint16_t moodCol = (mood >= 3) ? RED : (mood >= 2) ? HOT : p.textDim;
-  for (int i = 0; i < 4; i++) tinyHeart(54 + i * 16, y + 2, i < mood, moodCol);
-
-  y += 20;
-  spr.setCursor(6, y - 2); spr.print("fed");
-  uint8_t fed = statsFedProgress();
-  for (int i = 0; i < 10; i++) {
-    int px = 38 + i * 9;
-    if (i < fed) spr.fillCircle(px, y + 1, 2, p.body);
-    else spr.drawCircle(px, y + 1, 2, p.textDim);
-  }
-
-  y += 20;
-  spr.setCursor(6, y - 2); spr.print("energy");
-  uint8_t en = statsEnergyTier();
-  uint16_t enCol = (en >= 4) ? 0x07FF : (en >= 2) ? 0xFFE0 : HOT;
-  for (int i = 0; i < 5; i++) {
-    int px = 54 + i * 13;
-    if (i < en) spr.fillRect(px, y - 2, 9, 6, enCol);
-    else spr.drawRect(px, y - 2, 9, 6, p.textDim);
-  }
-
-  y += 24;
-  spr.fillRoundRect(6, y - 2, 42, 14, 3, p.body);
-  spr.setTextColor(p.bg, p.body);
-  spr.setCursor(11, y + 1); spr.printf("Lv %u", stats().level);
-
-  y += 20;
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(6, y);
-  spr.printf("approved %u", stats().approvals);
-  spr.setCursor(6, y + 10);
-  spr.printf("denied   %u", stats().denials);
-  uint32_t nap = stats().napSeconds;
-  spr.setCursor(6, y + 20);
-  spr.printf("napped   %luh%02lum", nap/3600, (nap/60)%60);
-  auto tokFmt = [&](const char* label, uint32_t v, int yPx) {
-    spr.setCursor(6, yPx);
-    if (v >= 1000000)   spr.printf("%s%lu.%luM", label, v/1000000, (v/100000)%10);
-    else if (v >= 1000) spr.printf("%s%lu.%luK", label, v/1000, (v/100)%10);
-    else                spr.printf("%s%lu", label, v);
-  };
-  tokFmt("tokens   ", stats().tokens, y + 30);
-  tokFmt("today    ", tama.tokensToday, y + 40);
-}
-
-static void drawPetHowTo(const Palette& p) {
-  const int TOP = 70;
-  spr.fillRect(0, TOP, W, H - TOP, p.bg);
-  spr.setTextSize(1);
-  int y = TOP + 2;
-  auto ln = [&](uint16_t c, const char* s) {
-    spr.setTextColor(c, p.bg); spr.setCursor(6, y); spr.print(s); y += 9;
-  };
-  auto gap = [&]() { y += 4; };
-
-  y += 12;  // room for the PET header drawn by drawPet()
-
-  ln(p.body,    "MOOD");
-  ln(p.textDim, " approve fast = up");
-  ln(p.textDim, " deny lots = down"); gap();
-
-  ln(p.body,    "FED");
-  ln(p.textDim, " 50K tokens =");
-  ln(p.textDim, " level up + confetti"); gap();
-
-  ln(p.body,    "ENERGY");
-  ln(p.textDim, " face-down to nap");
-  ln(p.textDim, " refills to full"); gap();
-
-  ln(p.textDim, "idle 30s = off");
-  ln(p.textDim, "any button = wake"); gap();
-
-  ln(p.textDim, "A: screens  B: page");
-}
-
-void drawPet() {
-  const Palette& p = characterPalette();
-  int y = 70;
-
-  if (petPage == 0) drawPetStats(p);
-  else drawPetHowTo(p);
-
-  // Header on top of whichever page drew — title left, counter right
-  spr.setTextSize(1);
-  spr.setTextColor(p.text, p.bg);
-  spr.setCursor(4, y + 2);
-  if (ownerName()[0]) {
-    spr.printf("%s's %s", ownerName(), petName());
-  } else {
-    spr.print(petName());
-  }
-  spr.setTextColor(p.textDim, p.bg);
-  spr.setCursor(W - 28, y + 2);
-  spr.printf("%u/%u", petPage + 1, PET_PAGES);
-}
-
 void drawHUD() {
   if (tama.promptId[0]) { drawApproval(); return; }
   const Palette& p = characterPalette();
@@ -873,7 +566,7 @@ void setup() {
   // so a fresh install lands on the GIF). With no GIF installed, 0xFF falls
   // through to buddyInit()'s clamped default.
   buddyMode = !(gifAvailable && speciesIdxLoad() == SPECIES_GIF);
-  applyDisplayMode();
+  repaintAll();
 
   {
     const Palette& p = characterPalette();
@@ -1004,10 +697,8 @@ void loop() {
       promptArrivedMs = millis();
       wake();
       beep(1200, 80);   // alert chirp
-      // Jump to the approval screen no matter what was open — drawApproval
-      // only runs from drawHUD which only runs in DISP_NORMAL.
-      displayMode = DISP_NORMAL;
-      applyDisplayMode();
+      // Repaint so the card band starts from a clean frame.
+      repaintAll();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
       cardPhase = CARD_REST;
@@ -1019,7 +710,7 @@ void loop() {
       if (cardSpr.created()) cardSpr.deleteSprite();
       cardPhase = CARD_REST;
       cardX = 0; cardVel = 0;
-      applyDisplayMode();
+      repaintAll();
       if (buddyMode) buddyInvalidate();
     }
   }
@@ -1099,14 +790,12 @@ void loop() {
     cardTouchPrev = false;
   }
 
-  // Button-press wake. Track which button woke the screen so its full
-  // press cycle (including long-press) is swallowed — you don't want
-  // BtnA-to-wake to also cycle displayMode or open the menu.
+  // Button-press wake. BtnB's press is swallowed when it wakes the screen
+  // so the same tap doesn't also scroll the transcript. BtnA is wake-only:
+  // the screens/menu it used to cycle are gone (owner request — bottom-left
+  // does nothing but wake).
   if (M5.BtnA.isPressed() || M5.BtnB.isPressed()) {
-    if (screenOff) {
-      if (M5.BtnA.isPressed()) swallowBtnA = true;
-      if (M5.BtnB.isPressed()) swallowBtnB = true;
-    }
+    if (screenOff && M5.BtnB.isPressed()) swallowBtnB = true;
     wake();
   }
 
@@ -1121,39 +810,11 @@ void loop() {
     }
   }
 
-  // Long press is a deliberate no-op (the menu it used to open is gone),
-  // but it must still be latched so its release doesn't fire the tap action.
-  if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
-    btnALong = true;
-  }
-  if (M5.BtnA.wasReleased()) {
-    if (!btnALong && !swallowBtnA) {
-      if (tama.promptId[0]) {
-        // swipe card owns decisions; a strip touch during a prompt is
-        // just the tail of a card drag — swallow it
-      } else {
-        beep(1800, 30);
-        displayMode = (displayMode + 1) % DISP_COUNT;
-        applyDisplayMode();
-      }
-    }
-    btnALong = false;
-    swallowBtnA = false;
-  }
-
-  // BtnB: pet → heart
+  // BtnB (bottom-right): scroll back through the transcript HUD.
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
-    else
-    if (tama.promptId[0]) {
+    else if (tama.promptId[0]) {
       // swipe card owns decisions — swallow strip touches during a prompt
-    } else if (displayMode == DISP_INFO) {
-      beep(2400, 30);
-      infoPage = (infoPage + 1) % INFO_PAGES;
-    } else if (displayMode == DISP_PET) {
-      beep(2400, 30);
-      petPage = (petPage + 1) % PET_PAGES;
-      applyDisplayMode();
     } else {
       beep(2400, 30);
       msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
@@ -1162,10 +823,6 @@ void loop() {
 
   // blink bookkeeping
 
-  // Charging clock: takes over the home screen when on USB power, no
-  // overlays, no prompt, no live Claude data, and the RTC has been set
-  // by the bridge. Pet sleeps underneath. Exit restores Y via
-  // applyDisplayMode() so the next mode-switch isn't visually offset.
   diagPhase(DP_CLOCK);
   clockRefreshRtc();   // 1Hz internal throttle; also caches _onUsb
   // The full-screen clock takeover is retired (owner request: the pet should
@@ -1181,7 +838,7 @@ void loop() {
   static bool wasLandscape = false;
   if (clocking != wasClocking || landscapeClock != wasLandscape) {
     if (clocking && !landscapeClock) characterSetPeek(true);
-    else applyDisplayMode();
+    else { characterSetPeek(false); buddySetPeek(false); repaintAll(); }
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
     wasClocking = clocking;
@@ -1243,8 +900,6 @@ void loop() {
   } else if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
     else if (clocking) drawClock();
-    else if (displayMode == DISP_INFO) drawInfo();
-    else if (displayMode == DISP_PET) drawPet();
     else if (settings().hud) drawHUD();
     drawMiniClock();
     spr.pushSprite(0, 0);

@@ -50,10 +50,12 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | **Swipe card right / left** | approve / deny the pending prompt |
 | **Hold the pet** | push-to-talk: holds your dictation hotkey while held |
 | **Swipe down** (anywhere) | press Enter on the Mac |
-| Tap bottom-left / bottom-right | next screen / next page |
+| Tap bottom-right | scroll back through the transcript |
 
-There is no on-device menu — species and settings are host-side via the CLI
-(`cc-buddy-bridge species`, `matchers.toml`).
+There is no on-device menu, settings, or info screen — the pet is always the
+whole UI. Species and settings are host-side via the CLI
+(`cc-buddy-bridge species`, `matchers.toml`); battery and link state via
+`cc-buddy-bridge status` / `diag`.
 
 The WS2812 pulses orange while an approval is pending, green on celebrate, solid blue while
 dictating.
