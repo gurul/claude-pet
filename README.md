@@ -43,12 +43,10 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | Tap bottom-**left** | next screen |
 | Tap bottom-**right** | next page |
 | **Hold** bottom-left | menu |
-| **Tap the pet** | pet it → heart |
-| **Scrub the pet** | dizzy! |
 | **Hold the pet** | push-to-talk: dictate via VoiceFlow while held (LED solid blue) |
 | **Swipe down on the pet** | press Enter on the Mac — dictate, then swipe to send |
 
-The WS2812 pulses orange while an approval is pending, pink on heart, green on celebrate.
+The WS2812 pulses orange while an approval is pending, green on celebrate, solid blue while dictating.
 
 ### The approval card
 
@@ -89,11 +87,16 @@ have.
 
 ### Swipe down to send
 
-A mostly-vertical drag of more than 55px on the pet taps **Enter** on the Mac,
+A strongly-vertical drag of more than 70px on the pet taps **Enter** on the Mac,
 so the natural loop is: hold to dictate, release, swipe down to send. It fires
-the moment the threshold is crossed rather than on release, latches one Enter
-per press, and is tested before scrub so a deliberate downward drag can't
-accumulate direction reversals and read as *dizzy* instead.
+the moment the threshold is crossed rather than on release and latches one
+Enter per press. The 70px / 3:1-vertical gate is deliberately strict — an
+accidental Enter lands in whatever app has focus, so this gesture must never
+fire from casual touching.
+
+Touching the pet is functional only: tap-for-heart and scrub-for-dizzy were
+removed by owner decree — the pet's moods come from Claude's state, not from
+being poked.
 
 The host allowlists exactly one key. A peripheral on a serial line asking for
 arbitrary keystrokes is a far larger surface than this feature needs, so

@@ -1185,17 +1185,12 @@ void loop() {
       sendCmd("{\"cmd\":\"key\",\"name\":\"enter\"}");
       beep(2000, 40);
     }
-    if (M5.petScrubbed() && (int32_t)(now - oneShotUntil) >= 0) {
-      wake();
-      triggerOneShot(P_DIZZY, 2000);
-      diagLog("gesture scrub");
-      Serial.println("scrub: dizzy");
-    } else if (M5.petTapped()) {
-      wake();
-      diagLog("gesture tap");
-      triggerOneShot(P_HEART, 2000);
-      beep(1600, 40);
-    }
+    // Tap-heart and scrub-dizzy are gone (owner request: touching the pet is
+    // functional only — hold to dictate, swipe down for Enter; the pet's
+    // moods come from Claude's state, not from being poked). The events are
+    // still drained so the compat-layer state machine can't latch.
+    if (M5.petTapped()) wake();
+    M5.petScrubbed();
   } else {
     // drain while overlays open, so a stale gesture can't fire later
     M5.petTapped(); M5.petScrubbed(); M5.petHoldStarted(); M5.petSwipedDown();
