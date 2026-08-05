@@ -59,10 +59,13 @@ FLAG_SECONDARY_FN = 0x00800000  # kCGEventFlagMaskSecondaryFn
 #              tracking the physical modifier (flagsChanged) see it, then
 #              Space carries the alternate flag for apps that read flags.
 HOTKEYS: dict[str, list[tuple[int, int]]] = {
+    # Bare Option hold — Willow Voice, once rebound off fn. An ordinary
+    # modifier, so unlike fn it synthesizes reliably.
+    "option": [(KEY_OPTION, FLAG_ALTERNATE)],
     "fn": [(KEY_FUNCTION, FLAG_SECONDARY_FN)],
     "opt-space": [(KEY_OPTION, 0), (KEY_SPACE, FLAG_ALTERNATE)],
 }
-DEFAULT_HOTKEY = "fn"
+DEFAULT_HOTKEY = "option"
 
 
 def _configured_hotkey() -> str:
@@ -92,8 +95,9 @@ def _enter_keycode() -> int:
 
 TAPPABLE = {"enter": _enter_keycode()}
 
-# poster signature: (keycode, down, flags_mask) -> None
-Poster = Callable[[int, bool, int], None]
+# poster signature: (keycode, down, flags_mask, is_hold=True) -> None
+# is_hold selects the event source; see _quartz_poster.
+Poster = Callable[..., None]
 
 
 def _quartz_poster() -> Optional[Poster]:
@@ -116,8 +120,23 @@ def _quartz_poster() -> Optional[Poster]:
     except Exception:  # noqa: BLE001
         src = None
 
-    def post(keycode: int, down: bool, flags: int) -> None:
-        ev = Quartz.CGEventCreateKeyboardEvent(src, keycode, down)
+    # Source choice is load-bearing and app-dependent:
+    #
+    # * Modifier HOLDS want the real HIDSystemState source — events built with
+    #   a NULL source carry no keyboard state, and dictation apps watching for
+    #   a held modifier ignore them.
+    # * Plain TAPS want the NULL source. With a real source, Warp's global key
+    #   handling swallowed Return before it reached the focused terminal app —
+    #   the dictated text sat in the prompt unsent. NULL-source Return worked
+    #   for hours before this was changed, so taps go back to it.
+    #
+    # CC_BUDDY_KEY_SOURCE=hid forces the real source everywhere if some other
+    # app ever needs the opposite.
+    force_hid = (os.environ.get("CC_BUDDY_KEY_SOURCE") or "").strip().lower() == "hid"
+
+    def post(keycode: int, down: bool, flags: int, hold: bool = True) -> None:
+        ev = Quartz.CGEventCreateKeyboardEvent(
+            src if (hold or force_hid) else None, keycode, down)
         if flags:
             Quartz.CGEventSetFlags(ev, flags)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
@@ -293,12 +312,12 @@ class VoiceHold:
                 log.warning("key: Accessibility not granted — see `voice-check`")
                 return False
             self._trust_check = None
-        self._poster(key, True, 0)
+        self._poster(key, True, 0, False)
         # Hold briefly. A down/up in the same microsecond is not a keypress any
         # human could produce, and apps that debounce or sample input on a
         # frame boundary drop it entirely.
         time.sleep(0.03)
-        self._poster(key, False, 0)
+        self._poster(key, False, 0, False)
         log.info("key: tapped %s", name)
         return True
 

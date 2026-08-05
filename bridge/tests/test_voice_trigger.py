@@ -22,9 +22,12 @@ from cc_buddy_bridge.voice_trigger import (
 class FakePoster:
     def __init__(self) -> None:
         self.events: list[tuple[int, bool, int]] = []
+        self.sources: list[bool] = []   # True = HID source (holds)
 
-    def __call__(self, keycode: int, down: bool, flags: int) -> None:
+    def __call__(self, keycode: int, down: bool, flags: int,
+                 hold: bool = True) -> None:
         self.events.append((keycode, down, flags))
+        self.sources.append(hold)
 
 
 class FakeClock:
@@ -158,15 +161,25 @@ def test_fn_hotkey_holds_the_function_key() -> None:
     assert p.events[-1] == (KEY_FUNCTION, False, 0)
 
 
-def test_fn_is_the_default() -> None:
+def test_option_is_the_default() -> None:
     v = VoiceHold(poster=FakePoster(), trust_check=None)
-    assert v._hotkey == "fn"
+    assert v._hotkey == "option"
+
+
+def test_option_chord_holds_and_clears_on_release() -> None:
+    from cc_buddy_bridge.voice_trigger import FLAG_ALTERNATE
+    p = FakePoster()
+    v = VoiceHold(poster=p, hotkey="option", trust_check=None)
+    v.start()
+    assert p.events == [(KEY_OPTION, True, FLAG_ALTERNATE)]
+    v.stop()
+    assert p.events[-1] == (KEY_OPTION, False, 0)
 
 
 def test_unknown_hotkey_env_falls_back(monkeypatch) -> None:
     monkeypatch.setenv("CC_BUDDY_VOICE_HOTKEY", "banana")
     v = VoiceHold(poster=FakePoster(), trust_check=None)
-    assert v._hotkey == "fn"
+    assert v._hotkey == "option"
 
 
 def test_env_selects_opt_space(monkeypatch) -> None:
@@ -197,3 +210,19 @@ def test_enter_can_be_switched_to_keypad(monkeypatch) -> None:
     from cc_buddy_bridge.voice_trigger import KEY_KEYPAD_ENTER, _enter_keycode
     monkeypatch.setenv("CC_BUDDY_ENTER_KEY", "keypad")
     assert _enter_keycode() == KEY_KEYPAD_ENTER
+
+
+def test_taps_use_the_null_event_source() -> None:
+    """Regression: Return built from a real HID source was swallowed by Warp's
+    global key handling and never reached the focused app — the dictated text
+    sat in the prompt unsent. Taps must use the NULL source."""
+    v, p, _ = _hold()
+    v.tap("enter")
+    assert p.sources == [False, False]
+
+
+def test_holds_use_the_hid_event_source() -> None:
+    """Modifier holds need real keyboard state or dictation apps ignore them."""
+    v, p, _ = _hold()
+    v.start()
+    assert all(p.sources), p.sources
