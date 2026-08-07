@@ -488,9 +488,10 @@ static void drawCardFace(TFT_eSPI* g, int ox, int oy, const Palette& p) {
   }
 }
 
-// Tap the card → full-screen detail: the whole command (prompt.detail from
-// the bridge, falling back to the hint), wrapped, with the same
-// swipe-to-decide still live. Tap again to collapse.
+// Full-screen detail — the DEFAULT view while a request is up: the whole
+// command (prompt.detail from the bridge, falling back to the hint) wrapped
+// over ~66% of the screen, with the same swipe-to-decide still live and only
+// minimal deny/approve affordances. Tap toggles the compact pet view.
 static void drawCardDetail(const Palette& p) {
   float r = cardRatio();
   uint16_t edge = (r > 0.3f) ? GREEN : (r < -0.3f) ? HOT
@@ -509,12 +510,33 @@ static void drawCardDetail(const Palette& p) {
     spr.setCursor(W - 14 - sw, 44);
     spr.print(tama.promptSess);
   }
+
+  // Meta row under the header: elapsed/left timer, queued count, pet hint.
+  int remain = (int)tama.promptTtl - (int)((millis() - tama.promptTtlAtMs) / 1000);
+  if (remain < 0) remain = 0;
+  bool closing = tama.promptTtl && remain <= 60;
+  uint32_t waited = (millis() - promptArrivedMs) / 1000;
+  char wb[12];
+  if (closing) snprintf(wb, sizeof(wb), "%ds left", remain);
+  else         snprintf(wb, sizeof(wb), "%lus", (unsigned long)waited);
+  spr.setTextColor(closing ? HOT : p.textDim, PANEL);
+  spr.setCursor(14, 58);
+  spr.print(wb);
+  if (tama.promptQueued) {
+    spr.setTextColor(p.body, PANEL);
+    spr.setCursor((W - 3 * 6) / 2, 58);
+    spr.printf("+%u", tama.promptQueued);
+  }
+  spr.setTextColor(p.textDim, PANEL);
+  spr.setCursor(W - 14 - 8 * 6, 58);
+  spr.print("tap: pet");
+
   const char* src = tama.promptDetail[0] ? tama.promptDetail : tama.promptHint;
-  static char rows[18][40];
-  uint8_t n = wrapInto(src, rows, 18, 36);
+  static char rows[24][40];
+  uint8_t n = wrapInto(src, rows, 24, 36);
   spr.setTextColor(p.text, PANEL);
-  int y = 64;
-  for (uint8_t i = 0; i < n; i++, y += 10) {
+  int y = 72;
+  for (uint8_t i = 0; i < n && y <= H - 38; i++, y += 10) {
     spr.setCursor(14, y);
     spr.print(rows[i]);
   }
@@ -524,9 +546,12 @@ static void drawCardDetail(const Palette& p) {
   spr.setTextColor(GREEN, PANEL);
   spr.setCursor(W - 14 - 9 * 6, H - 24);
   spr.print("approve >");
-  spr.setTextColor(p.textDim, PANEL);
-  spr.setCursor((W - 12 * 6) / 2, H - 24);
-  spr.print("tap to close");
+  // TTL drain bar along the panel's bottom edge, same scale as the compact
+  // card, so the terminal-fallback deadline stays visible in this view too.
+  if (tama.promptTtlMax) {
+    int bw = (W - 28) * remain / tama.promptTtlMax;
+    if (bw > 0) spr.fillRect(14, H - 14, bw, 2, closing ? HOT : p.textDim);
+  }
   if (fabsf(r) > 0.3f) {
     bool ok = r > 0;
     const char* s = ok ? (cardAlways ? "ALWAYS" : "APPROVE") : "DENY";
@@ -832,7 +857,11 @@ void loop() {
       if (buddyMode) buddyInvalidate();
       cardPhase = CARD_REST;
       cardX = 0; cardVel = 0; cardArmed = false; cardAlways = false;
-      cardExpanded = false;
+      // Text-first: a fresh request opens straight into the full-screen
+      // detail view (the pet steps aside) so the command is readable
+      // without an extra tap. Tapping toggles back to the compact
+      // pet-and-card view and the swipe gestures work in both.
+      cardExpanded = true;
       if (!cardSpr.created()) cardSpr.createSprite(CARD_W, CARD_H);
     } else {
       // Prompt resolved — free the card sprite and repaint everything so

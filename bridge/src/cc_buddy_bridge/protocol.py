@@ -97,10 +97,12 @@ def build_heartbeat(state: State, msg: Optional[str] = None, codec: Optional[str
         if pending.tool_name == "Bash" and is_destructive(pending.hint):
             snapshot["prompt"]["risk"] = "hot"
         # When the 60-byte hint truncates the command, ship a longer detail
-        # tail — the card expands to full screen on tap to show it.
+        # tail — the text-first card shows it full screen by default. 720
+        # bytes fills the card's ~21x36-char text area and must stay inside
+        # the firmware's promptDetail[724] and its 2048-byte line buffer.
         if len(pending.hint.encode("utf-8")) > 60:
             snapshot["prompt"]["detail"] = sanitize_for_stick(
-                truncate_utf8_bytes(pending.hint, 180), codec)
+                truncate_utf8_bytes(pending.hint, 720), codec)
     return snapshot
 
 

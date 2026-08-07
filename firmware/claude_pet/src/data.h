@@ -25,7 +25,9 @@ struct TamaState {
   uint32_t promptTtlAtMs;    // millis() when promptTtl arrived (for local countdown)
   uint16_t promptTtlMax;     // largest ttl seen for this prompt — drain-bar scale
   bool     promptHot;        // destructive command: hot border, stiffer approve
-  char     promptDetail[184];// long-command tail; empty = hint says it all
+  char     promptDetail[724];// long-command tail; empty = hint says it all.
+                             // Sized for the text-first card: ~21 rows of 36
+                             // chars, matching the bridge's 720-byte cap.
 };
 
 // ---------------------------------------------------------------------------
@@ -164,7 +166,11 @@ struct _LineBuf {
   }
 };
 
-static _LineBuf<1024> _usbLine, _btLine;
+// Sized so a heartbeat carrying the full 720-byte prompt detail plus entries
+// still fits on one line — an overflowing line truncates and the WHOLE
+// snapshot fails to parse, which would drop heartbeats exactly while a long
+// prompt is up. (HWCDC RX buffer is 4096, see board_compat.)
+static _LineBuf<2048> _usbLine, _btLine;
 
 inline void dataPoll(TamaState* out) {
   uint32_t now = millis();
