@@ -33,6 +33,11 @@ GLASS_W = 50.11
 STACK_H = 9.50       # PCB underside → glass top
 HOLE_PITCH_L = 74.95
 HOLE_PITCH_W = 39.59
+USB_W = 9.10         # connector width
+USB_GAP_SHORT = 19.5  # bottom-edge gap on the BOOT side (far side: 22.39)
+# → connector center is 1.45mm off-center toward BOOT. Which way that mirrors
+# into shell x is unverified, so the slot stays centered and wide enough to
+# cover both orientations; narrow to USB_W + 3 once the direction is pinned.
 
 # ---- assumed / eyeballed (params to refine) ----
 HOLE_D = 3.2         # M3 clearance in PCB (screw bites plastic boss below)
@@ -47,7 +52,7 @@ BOSS_D = 7.0
 PILOT_D = 2.8        # M3 self-tap pilot
 SCREW_D = 3.4
 CSK_D = 6.5          # countersink head diameter
-USB_SLOT_W = 13.0    # generous; connector eyeballed centered on bottom edge
+USB_SLOT_W = 14.5    # centered; covers the ±1.45 offset either way (see above)
 USB_SLOT_H = 7.0
 BTN_FROM_EDGE = 6.0  # BOOT/RESET pokehole centers from bottom board edge
 BTN_FROM_MID = 15.0  # ... and ±x from centerline
