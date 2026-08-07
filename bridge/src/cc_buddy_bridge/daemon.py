@@ -263,6 +263,13 @@ class Daemon:
                         force(why)
                     continue
             self._status_sent_at = time.monotonic()
+            # Re-sync time with every poll. The board's RTC-valid flag is
+            # RAM-only, so any watchdog reset blanks the mini clock; a reboot
+            # that slips past silence detection (fast reboot, half-dead link)
+            # never refires the on-connect time sync, leaving the clock gone
+            # until the next reconnect. Periodic sync makes it self-heal
+            # within one poll and corrects RTC drift for free.
+            await self.ble.send(build_time_sync())
             await self.ble.send({"cmd": "status"})
 
     async def _voice_watchdog(self) -> None:
