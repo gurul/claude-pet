@@ -30,10 +30,12 @@ BOARD_L = 85.95      # long axis (portrait vertical)
 BOARD_W = 50.99
 GLASS_L = 69.69
 GLASS_W = 50.11
-STACK_H = 9.50       # glass top → PCB underside (reading A — see MAX_BACK)
 MAX_BACK = 10.66     # glass top → tallest back component (measured)
-# If 9.50 was actually glass→SD-cage-top, PCB underside is ~7.5 and STACK_H
-# must drop; discriminator: caliper glass top → bare PCB bottom AT THE WING.
+# The earlier 9.50 "depth" was discarded (owner: ignore it — likely jaws on
+# the SD cage). STACK_H is DERIVED: MAX_BACK minus a standard 3.2mm USB-C
+# body, the tallest back component in the photos. Replace with a caliper
+# reading of glass top → bare PCB underside AT THE WING when available.
+STACK_H = MAX_BACK - 3.2   # ≈7.46, glass top → PCB underside (estimate)
 HOLE_PITCH_L = 74.95
 HOLE_PITCH_W = 39.59
 USB_W = 9.10         # connector width
