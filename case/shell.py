@@ -43,6 +43,8 @@ MAX_BACK = 10.66     # glass top → tallest back component (measured)
 STACK_H = MAX_BACK - 3.2   # ≈7.46, glass top → PCB underside (estimate)
 HOLE_PITCH_L = 74.95
 HOLE_PITCH_W = 39.59
+PCB_HOLE_D = 3.18    # mounting holes ≈1/8in — standard M3 (confirms the
+                     # M3 hardware path: 3.4 face bores, 2.8 boss pilots)
 USB_W = 9.10         # connector width
 USB_GAP_SHORT = 19.5  # bottom-edge gap on the BOOT side (far side: 22.39)
 # → connector center is 1.45mm off-center toward BOOT. Which way that mirrors
