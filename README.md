@@ -32,9 +32,10 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
   read grants its whole enclosing repo for the daemon's lifetime.
 - **Summons your terminal.** Tap the pet while it demands attention and the daemon raises
   the terminal of the session that's blocked on you (swipe up on a permission card for the
-  same, without deciding). iTerm2 and Terminal.app get window-level matching by the session's
-  cwd; Ghostty, Warp, cmux, Cursor and friends are raised app-level — the order is
-  configurable via `CC_BUDDY_FOCUS_APPS`.
+  same, without deciding). Window-level matching by the session's repo name works everywhere —
+  AppleScript for iTerm2/Terminal.app, Accessibility (AXRaise) for Ghostty, Warp, cmux and
+  friends — falling back to raising the app; the app order is configurable via
+  `CC_BUDDY_FOCUS_APPS`.
 - **Push-to-talk dictation.** Hold the pet and the daemon holds your dictation app's global
   hotkey until you let go — app-agnostic, it just holds a chord.
 - **Hands-on-pet option picking.** Swipe left/right to walk Claude Code's option pickers

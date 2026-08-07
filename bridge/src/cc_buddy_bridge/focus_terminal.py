@@ -133,15 +133,43 @@ async def _app_running(bundle_hint: str) -> bool:
     return (await proc.wait()) == 0
 
 
-async def _osascript(script: str, arg: str) -> str | None:
+async def _osascript(script: str, *args: str) -> str | None:
     proc = await asyncio.create_subprocess_exec(
-        "osascript", "-e", script, arg,
+        "osascript", "-e", script, *args,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, err = await proc.communicate()
     if proc.returncode != 0:
         log.debug("focus: osascript failed: %s", err.decode(errors="replace").strip()[:200])
         return None
     return out.decode(errors="replace").strip()
+
+
+# Window-level matching for apps WITHOUT an AppleScript model (Warp, Ghostty,
+# cmux, …): System Events reads window titles through Accessibility — which
+# the daemon already holds for push-to-talk — and AXRaise brings the matching
+# window forward. Reports "frontmost" when the app is already up front with no
+# matching title, so the caller can say "you're already looking at it" instead
+# of silently no-op'ing an activate (the 2026-08-07 tap-test confusion).
+_AX_RAISE_SCRIPT = '''
+on run argv
+  set procName to item 1 of argv
+  set needle to item 2 of argv
+  tell application "System Events"
+    if not (exists process procName) then return "no-proc"
+    tell process procName
+      repeat with w in windows
+        if (name of w as string) contains needle then
+          perform action "AXRaise" of w
+          set frontmost to true
+          return "raised"
+        end if
+      end repeat
+      if frontmost then return "frontmost"
+    end tell
+  end tell
+  return "no-match"
+end run
+'''
 
 
 async def focus_session_terminal(cwd: str) -> None:
@@ -158,17 +186,44 @@ async def focus_session_terminal(cwd: str) -> None:
             log.info("focus: Terminal %s (needle=%r)", result or "error", needle)
             if result:
                 return
-        # No scriptable window model — just raise the app that is running.
-        for proc_name, bundle_id in activate_targets():
-            if await _app_running(proc_name):
-                if bundle_id is not None:
-                    result = await _osascript(_ACTIVATE_SCRIPT, bundle_id)
-                else:
-                    result = await _osascript(_ACTIVATE_BY_NAME_SCRIPT, proc_name)
-                log.info("focus: activated %s (%s)", proc_name,
-                         result or "error")
-                if result:
+
+        running = []
+        for target in activate_targets():
+            if await _app_running(target[0]):
+                running.append(target)
+
+        # Pass 1: window-title match across every running candidate — the
+        # session might live in the second app on the list, and raising the
+        # right window beats raising a whole app.
+        frontmost_app: str | None = None
+        if needle:
+            for proc_name, _ in running:
+                result = await _osascript(_AX_RAISE_SCRIPT, proc_name, needle)
+                if result == "raised":
+                    log.info("focus: raised %s window matching %r", proc_name, needle)
                     return
+                if result == "frontmost" and frontmost_app is None:
+                    frontmost_app = proc_name
+
+        # A candidate is already frontmost and nothing matched by title —
+        # activating it would be an invisible no-op. Odds are the session is
+        # what's on screen (Claude Code retitles windows to the conversation
+        # summary, which never contains the cwd).
+        if frontmost_app is not None:
+            log.info("focus: %s already frontmost, no window matched %r — "
+                     "assuming it's on screen", frontmost_app, needle)
+            return
+
+        # Pass 2: no window matched anywhere — raise the first running app.
+        for proc_name, bundle_id in running:
+            if bundle_id is not None:
+                result = await _osascript(_ACTIVATE_SCRIPT, bundle_id)
+            else:
+                result = await _osascript(_ACTIVATE_BY_NAME_SCRIPT, proc_name)
+            log.info("focus: activated %s (%s)", proc_name,
+                     result or "error")
+            if result:
+                return
         log.info("focus: no known terminal app running (needle=%r)", needle)
     except Exception as e:  # noqa: BLE001
         log.warning("focus: failed non-fatally: %s", e)

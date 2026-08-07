@@ -91,14 +91,24 @@ Two gestures send `{"cmd":"focus"}` board→host; both are look-only and decide 
   `activeState`, so a one-shot celebrate overlay can't eat it) and stays wake-only in every
   other state — touching the pet remains functional-only.
 
-`focus_terminal.py` then raises the terminal: iTerm2 and Terminal.app are searched
-window-by-window for the cwd basename in titles (AppleScript); everything else has no scriptable
-window model, so the first *running* app from an ordered activate list is raised app-level —
-Ghostty, Warp (stable + preview), cmux (`com.cmuxterm.app`, id from the vendor repo), Composer
-(by name — no verifiable bundle id), Cursor, VS Code. `CC_BUDDY_FOCUS_APPS` (comma-separated
-names, priority order) replaces that list; names matching a default keep their bundle id,
-unknown names activate by name. Requires macOS Automation permission (prompted once); every
-failure is non-fatal — worst case nothing raises.
+`focus_terminal.py` then raises the terminal, best match first:
+
+1. **iTerm2 / Terminal.app** — searched tab-by-tab for the cwd basename in titles (AppleScript).
+2. **AXRaise pass** — every *running* app from the activate list (Ghostty, Warp — whose
+   executable is literally named `stable` — cmux `com.cmuxterm.app`, Composer, Cursor, VS Code)
+   gets its window titles read through System Events/Accessibility; a title containing the cwd
+   basename is AXRaise'd and the app fronted. This is how window-level focus works on apps with
+   no AppleScript model.
+3. **Already-frontmost check** — if a candidate is frontmost and nothing matched by title, the
+   daemon logs "assuming it's on screen" and stops. Claude Code retitles windows to the
+   conversation summary (never the cwd), so a session you're already looking at can't title-match;
+   activating would be an invisible no-op — the 2026-08-07 "tap didn't work" confusion.
+4. **App-level activate** — first running candidate is raised whole.
+
+`CC_BUDDY_FOCUS_APPS` (comma-separated names, priority order) replaces the activate list; names
+matching a default keep their bundle id, unknown names activate by name. Needs macOS Automation
+permission for the scripted apps + System Events (prompted once); every failure is non-fatal —
+worst case nothing raises.
 
 ## Diagnostics
 
