@@ -30,7 +30,10 @@ BOARD_L = 85.95      # long axis (portrait vertical)
 BOARD_W = 50.99
 GLASS_L = 69.69
 GLASS_W = 50.11
-STACK_H = 9.50       # PCB underside → glass top
+STACK_H = 9.50       # glass top → PCB underside (reading A — see MAX_BACK)
+MAX_BACK = 10.66     # glass top → tallest back component (measured)
+# If 9.50 was actually glass→SD-cage-top, PCB underside is ~7.5 and STACK_H
+# must drop; discriminator: caliper glass top → bare PCB bottom AT THE WING.
 HOLE_PITCH_L = 74.95
 HOLE_PITCH_W = 39.59
 USB_W = 9.10         # connector width
@@ -45,7 +48,7 @@ CLR = 0.30           # board-to-shell clearance each side
 WALL = 2.40
 FACE_T = 2.00        # front bezel plate thickness
 LIP = 1.20           # bezel overlap onto the glass border
-REAR_CAVITY = 8.0    # room behind PCB for SD/JST/buttons
+REAR_CAVITY = (MAX_BACK - STACK_H) + 2.3   # tallest component + air gap
 BACK_T = 2.00
 CORNER_R = 3.0
 BOSS_D = 7.0
