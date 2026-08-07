@@ -41,12 +41,15 @@ def _unsupported_platform_msg() -> str:
     )
 
 
-def install_service(serial_port: str | None = None) -> int:
+def install_service(
+    serial_port: str | None = None,
+    voice_hotkey: str | None = None,
+) -> int:
     backend = _backend()
     if backend is None:
         print(_unsupported_platform_msg(), file=sys.stderr)
         return 2
-    return backend.install(serial_port=serial_port)
+    return backend.install(serial_port=serial_port, voice_hotkey=voice_hotkey)
 
 
 def uninstall_service() -> int:

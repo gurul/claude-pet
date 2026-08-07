@@ -12,6 +12,7 @@ import sys
 from . import __version__
 from .daemon import Daemon
 from .ipc import make_transport
+from .voice_trigger import DEFAULT_HOTKEY, HOTKEYS
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,6 +50,16 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("CC_BUDDY_SERIAL_PORT") or None,
         help="With --service: bake this USB serial port (glob ok, e.g. '/dev/cu.usbmodem*') "
              "into the service so the daemon uses serial instead of BLE.",
+    )
+    p_install.add_argument(
+        "--voice-hotkey",
+        default=os.environ.get("CC_BUDDY_VOICE_HOTKEY") or None,
+        choices=sorted(HOTKEYS),
+        help=f"With --service: bake the push-to-talk hotkey into the service. "
+             f"Default is '{DEFAULT_HOTKEY}' — a bare Option hold, which synthesizes "
+             f"reliably and is what most dictation apps should be rebound to. Without "
+             f"this flag the hotkey must be hand-edited into the unit file, and the "
+             f"next --service install silently reverts it.",
     )
     p_uninstall = sub.add_parser(
         "uninstall", help="Remove cc-buddy-bridge hooks from Claude Code's settings.json")
@@ -147,7 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "install":
         if getattr(args, "service", False):
             from .service import install_service
-            return install_service(serial_port=getattr(args, "serial_port", None))
+            return install_service(
+                serial_port=getattr(args, "serial_port", None),
+                voice_hotkey=getattr(args, "voice_hotkey", None),
+            )
         from .installer import install_hooks
         return install_hooks(config_dir=getattr(args, "config_dir", None))
     if args.cmd == "uninstall":

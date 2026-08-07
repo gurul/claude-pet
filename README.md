@@ -94,13 +94,18 @@ tap **RESET**, release BOOT, retry.
 cd bridge
 python3.12 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/cc-buddy-bridge install    # registers the hooks in Claude Code's settings.json
-.venv/bin/cc-buddy-bridge install --service --serial-port '/dev/cu.usbmodem*'
+.venv/bin/cc-buddy-bridge install --service --serial-port '/dev/cu.usbmodem*' --voice-hotkey option
 ```
+
+`install` and `install --service` are **two separate steps** — `--service` installs the unit
+*instead of* the hooks, so running only the second leaves you with a connected board that
+never receives session state. Run both.
 
 | Command | What |
 |---|---|
 | `daemon --serial-port …` | run the bridge in the foreground |
-| `install` / `uninstall` / `status` | manage hooks; `--service` also installs the launchd/systemd unit |
+| `install` / `uninstall` / `status` | manage hooks; `--service` installs the launchd/systemd unit *instead* |
+| `install --service --voice-hotkey option` | bake the push-to-talk hotkey into the unit so it survives reinstalls |
 | `audit` | the approval decision log |
 | `diag` / `diag --watch` | why the board last reset, and what it was doing |
 | `voice-check` | diagnose push-to-talk (Accessibility permission, hotkey delivery) |
@@ -112,7 +117,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -e .
 |---|---|
 | `CLAUDE_CONFIG_DIR` | which Claude config home `install`/`status` target (default `~/.claude`) |
 | `CC_BUDDY_CLAUDE_CONFIG_DIRS` | `os.pathsep`-separated homes the daemon serves — it runs outside any session, so it can't inherit the above |
-| `CC_BUDDY_VOICE_HOTKEY` | `option` (default), `opt-space`, or `fn` — match your dictation app |
+| `CC_BUDDY_VOICE_HOTKEY` | `option` (default and recommended), `opt-space`, or `fn` — prefer rebinding your dictation app to Option over changing this. Bake it in with `install --service --voice-hotkey …`; a hand-edited unit file is wiped by the next `--service` install |
 | `CC_BUDDY_KEY_METHOD` | `osascript` routes Enter through System Events, for apps that swallow synthetic key events (Warp) |
 
 Installing into the wrong config home **fails silently** — hooks written, board animating,
@@ -121,7 +126,28 @@ no session ever prompting. `status` prints the home it resolved; check it first.
 Push-to-talk needs **Accessibility permission** for the daemon's python (macOS filters
 synthetic events from untrusted processes). `voice-check` prints the exact binary to grant.
 Avoid `fn` as a hotkey: it's a secondary-fn modifier that many apps read from raw HID, which
-synthetic events can't reach — rebind to an ordinary chord.
+synthetic events can't reach — rebind your dictation app to a bare **Option** hold, the
+default, which synthesizes reliably.
+
+Granting that permission has two traps worth knowing before you fight them:
+
+- **The system dialog is the easy path.** Holding the pet once triggers macOS's
+  "would like to control this computer" prompt, whose *Open System Settings* button adds the
+  entry for you. It fires **once per daemon lifetime** — if you miss it, restart the daemon
+  to get it back. Adding the binary by hand instead means `+` → file picker → click out of
+  the search field → `Cmd+Shift+G`; dragging from Finder is silently rejected.
+- **`voice-check` run from a granted terminal reports that terminal's permission, not the
+  daemon's.** macOS attributes Accessibility to the responsible process, so a terminal with
+  the grant makes the check print `trusted: True` while the launchd daemon logs
+  `Accessibility not granted`. When the two disagree, **the daemon log is the truth.**
+
+After editing a unit file, reload it properly — `launchctl kickstart` restarts the process
+but reuses the job definition cached at load time, so environment changes are ignored:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+launchctl load -w ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
+```
 
 ## Layout
 
