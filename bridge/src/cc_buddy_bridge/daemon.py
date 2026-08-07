@@ -517,7 +517,10 @@ class Daemon:
         # If BLE isn't connected, skip the round-trip and return no decision so
         # Claude Code's normal flow runs (respects user's auto/allow settings).
         if not self.ble.connected:
-            log.info("pretooluse for %s: ble not connected, deferring to default flow", tool_name)
+            # "stick", not "ble": self.ble duck-types over serial too, and the
+            # 2026-08-06 log read as a BLE problem when the board was simply
+            # off the USB bus.
+            log.info("pretooluse for %s: stick not connected, deferring to default flow", tool_name)
             self.audit.record(**audit_kwargs, decision=None, source="ble_disconnected")
             return {"ok": True}
 
