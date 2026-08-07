@@ -146,16 +146,22 @@ Disconnect runbook (from the 2026-08-05 crash-loop investigation):
 ## Shell (case/)
 
 `case/shell.py` is a parametric FreeCAD script (run via `freecadcmd`, exports STLs + FCStd to
-`case/export/`). Three parts: **frame** (front bezel + walls, countersunk M3 self-tappers enter
-from the front), **back** (four bosses rise to the PCB underside — the front screws pass through
-the PCB holes and bite into them, clamping board and shell with the same four screws; WS2812 glow
-window + BOOT/RESET pokeholes), **stand** (separate 72° wedge dock with cable channel — angle
-experiments don't cost a shell reprint). Portrait, USB-C edge down.
+`case/export/`). Three parts, all support-free in their print orientations: **frame** (face down —
+bezel + walls; 4× M3×12/14 flat-head self-tappers enter countersinks from the front, ride D-trimmed
+guide standoffs through the PCB holes), **back** (outer face down — bosses seat the PCB, biased
+0.3mm short of the derived PCB plane so stack-estimate error can pull the glass back but never
+crush it into the lip; corner lips register the plate; WS2812 glow window + BOOT/RESET pokeholes),
+**stand** (base down — 65° wedge dock, open cable mouth, no bridges). Portrait, USB-C edge down;
+long walls carry relief pockets for the edge-mounted JST sockets, and the USB notch continues
+through the back-cover edge so chunky cable overmolds (~8.5mm) pass.
 
-Measured 2026-08-07: board 85.95×50.99, glass 69.69×50.11, stack 9.50 (PCB underside→glass top),
-hole grid 74.95×39.59 (M3 assumed). Still eyeballed from photos, verify before print 2:
-USB/BOOT/RESET/mic/LED positions, PCB thickness, rear component clearance (8mm assumed).
-The `freecad` MCP server is registered in `.mcp.json` for live-in-GUI iteration.
+**The script proves fit on every build**: a mock board (PCB + display module + USB body + JST
+overhangs + measured component envelope with hole keep-outs) must intersect neither shell part or
+the build asserts. Measured 2026-08-07: board 85.95×50.99, glass 69.69×50.11, back envelope 10.66
+(glass→tallest component; the earlier 9.50 was discarded), hole grid 74.95×39.59, USB-C 9.10 wide
++1.45 toward BOOT. Derived: PCB plane at 7.46 (envelope − 3.2 USB body). Eyeballed, oversized to
+absorb error: button/mic/LED positions. The `freecad` MCP server is registered in `.mcp.json` for
+live-in-GUI iteration.
 
 ## Gotchas
 
