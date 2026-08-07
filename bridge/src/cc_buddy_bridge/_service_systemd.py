@@ -25,7 +25,7 @@ UNIT_NAME = "cc-buddy-bridge.service"
 UNIT_PATH = Path.home() / ".config" / "systemd" / "user" / UNIT_NAME
 
 
-def _build_unit(serial_port: str | None = None) -> str:
+def _build_unit(serial_port: str | None = None, voice_hotkey: str | None = None) -> str:
     """Render the .service unit file.
 
     ``ExecStart`` uses the Python interpreter that's running *this* install
@@ -35,6 +35,8 @@ def _build_unit(serial_port: str | None = None) -> str:
     env_line = (
         f'Environment="CC_BUDDY_SERIAL_PORT={serial_port}"\n' if serial_port else ""
     )
+    if voice_hotkey:
+        env_line += f'Environment="CC_BUDDY_VOICE_HOTKEY={voice_hotkey}"\n'
     # See the launchd backend: a service-run daemon can't inherit a per-session
     # $CLAUDE_CONFIG_DIR, so the homes to watch are baked in at install time.
     dirs = daemon_config_dirs()
@@ -65,13 +67,13 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def install(serial_port: str | None = None) -> int:
+def install(serial_port: str | None = None, voice_hotkey: str | None = None) -> int:
     if shutil.which("systemctl") is None:
         print("cc-buddy-bridge: `systemctl` not found on PATH", file=sys.stderr)
         return 2
 
     UNIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    UNIT_PATH.write_text(_build_unit(serial_port), encoding="utf-8")
+    UNIT_PATH.write_text(_build_unit(serial_port, voice_hotkey), encoding="utf-8")
 
     reload_res = _systemctl("daemon-reload")
     if reload_res.returncode != 0:

@@ -7,8 +7,15 @@ that hotkey between the two events: finger down = key down, finger up = key
 up, dictation lands wherever the cursor is.
 
 Which hotkey is configurable (CC_BUDDY_VOICE_HOTKEY), because it is a property
-of the dictation app, not of the pet: `fn` for Willow Voice (default), or
-`opt-space` for VoiceFlow. See HOTKEYS.
+of the dictation app, not of the pet. The default is `option` — a bare Option
+hold — and it is the one to prefer: Option is an ordinary modifier, so it
+synthesizes reliably through CGEventPost, and every dictation app worth using
+can be rebound to it. Prefer rebinding the app over changing this.
+
+The alternatives exist for apps that cannot be rebound: `opt-space` (VoiceFlow's
+stock chord) and `fn`. Avoid `fn` where you can — it is a secondary-fn modifier
+that many apps read straight from raw HID, so a synthesized fn is simply not
+seen. See HOTKEYS.
 
 Mechanics: Quartz CGEventPost at the HID tap, from a real HIDSystemState
 event source — events built with a NULL source carry no keyboard state and

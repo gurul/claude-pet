@@ -22,7 +22,7 @@ PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 LOG_PATH = Path.home() / "Library" / "Logs" / "cc-buddy-bridge.log"
 
 
-def _build_plist(serial_port: str | None = None) -> bytes:
+def _build_plist(serial_port: str | None = None, voice_hotkey: str | None = None) -> bytes:
     """Render the plist as XML bytes.
 
     ``ProgramArguments`` uses the Python interpreter that's running *this*
@@ -52,6 +52,10 @@ def _build_plist(serial_port: str | None = None) -> bytes:
         # cli.py's daemon subcommand defaults --serial-port from this env
         # var, so the service uses USB serial instead of BLE.
         plist["EnvironmentVariables"]["CC_BUDDY_SERIAL_PORT"] = serial_port
+    if voice_hotkey:
+        # Same deal for push-to-talk. Baking it here is the only way it
+        # survives a reinstall — a hand-edited plist is overwritten below.
+        plist["EnvironmentVariables"]["CC_BUDDY_VOICE_HOTKEY"] = voice_hotkey
     # launchd starts the daemon outside any Claude Code session, so it can
     # never inherit a per-session $CLAUDE_CONFIG_DIR. Bake in the homes to
     # serve at install time — otherwise the daemon tails only ~/.claude and
@@ -62,14 +66,14 @@ def _build_plist(serial_port: str | None = None) -> bytes:
     return plistlib.dumps(plist)
 
 
-def install(serial_port: str | None = None) -> int:
+def install(serial_port: str | None = None, voice_hotkey: str | None = None) -> int:
     if shutil.which("launchctl") is None:
         print("cc-buddy-bridge: `launchctl` not found on PATH", file=sys.stderr)
         return 2
 
     PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PLIST_PATH.write_bytes(_build_plist(serial_port))
+    PLIST_PATH.write_bytes(_build_plist(serial_port, voice_hotkey))
 
     # Unload first so idempotent re-install picks up any new interpreter path.
     subprocess.run(["launchctl", "unload", str(PLIST_PATH)], capture_output=True)
