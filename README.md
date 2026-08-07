@@ -58,6 +58,20 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | Touch | FT6336G @ I2C 0x38 — SDA 16 / SCL 15 / INT 17 / RST 18 |
 | Extras | WS2812 LED (GPIO42), ES8311 codec + mic + speaker (unused), microSD, battery ADC GPIO9 |
 
+## Printable shell
+
+![frame, back and stand as they come off the printer](docs/assets/shell-render.png)
+
+A parametric three-part case lives in `case/` — `shell.py` builds it headless in FreeCAD
+and exports STLs to `case/export/`. Frame (bezel + walls, print face down), back cover
+(screw bosses, WS2812 glow window, BOOT/RESET pokeholes, print outer face down), and a
+65° stand dock (print base down). All support-free. Four M3×12 flat-head self-tappers
+enter from the front, pass through the PCB's own mounting holes, and bite into the back
+cover's bosses — board and shell clamp with one screw path. Every rebuild runs a **fit
+proof**: a mock board (PCB, display module, USB body, connector overhangs) must clear
+both shell parts or the build fails. Dimensions came off the real board with calipers;
+see `DESIGN.md` for what's measured vs. derived.
+
 ## Controls
 
 | Gesture | Action |
