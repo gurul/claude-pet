@@ -143,6 +143,20 @@ Disconnect runbook (from the 2026-08-05 crash-loop investigation):
   `rmtWrite(..., RMT_WAIT_FOR_EVER)`. `ledSet()` now encodes the frame itself with a 100ms
   deadline and skips the frame on timeout.
 
+## Shell (case/)
+
+`case/shell.py` is a parametric FreeCAD script (run via `freecadcmd`, exports STLs + FCStd to
+`case/export/`). Three parts: **frame** (front bezel + walls, countersunk M3 self-tappers enter
+from the front), **back** (four bosses rise to the PCB underside — the front screws pass through
+the PCB holes and bite into them, clamping board and shell with the same four screws; WS2812 glow
+window + BOOT/RESET pokeholes), **stand** (separate 72° wedge dock with cable channel — angle
+experiments don't cost a shell reprint). Portrait, USB-C edge down.
+
+Measured 2026-08-07: board 85.95×50.99, glass 69.69×50.11, stack 9.50 (PCB underside→glass top),
+hole grid 74.95×39.59 (M3 assumed). Still eyeballed from photos, verify before print 2:
+USB/BOOT/RESET/mic/LED positions, PCB thickness, rear component clearance (8mm assumed).
+The `freecad` MCP server is registered in `.mcp.json` for live-in-GUI iteration.
+
 ## Gotchas
 
 - **Touch releases need debouncing.** `readTouch()` returns false on a momentary `TD_STATUS==0`

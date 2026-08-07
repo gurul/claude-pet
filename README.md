@@ -165,6 +165,7 @@ launchctl load -w ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
 | `firmware/claude_pet` | the sketch — pet state machine, touch UI, swipe cards, clock, diag ring |
 | `firmware/claude_pet/src/board_compat.*` | the port: shims the `M5StickCPlus.h` API onto this board |
 | `bridge/src/cc_buddy_bridge` | daemon, hooks, serial transport, voice trigger, read policy |
+| `case/shell.py` | parametric 3D-printable shell (FreeCAD headless) — frame + back + stand dock, STLs in `case/export/` |
 | `tools/flash.sh` | compile + ELF archive + daemon-safe flash in one step |
 | `DESIGN.md` | architecture, board facts, port map, disconnect runbook, and the gotchas worth knowing |
 
