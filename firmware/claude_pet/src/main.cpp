@@ -822,7 +822,19 @@ void loop() {
     // functional only — hold to dictate, swipe down for Enter; the pet's
     // moods come from Claude's state, not from being poked). The events are
     // still drained so the compat-layer state machine can't latch.
-    if (M5.petTapped()) wake();
+    // The one functional tap: while the pet demands attention (a session is
+    // blocked on the human but no card is up — cards own the screen and have
+    // their own swipe-up focus), tapping it raises that session's terminal.
+    // baseState, not activeState: a one-shot overlay (level-up celebrate)
+    // must not eat the tap while a session is actually waiting.
+    if (M5.petTapped()) {
+      wake();
+      if (baseState == P_ATTENTION) {
+        diagLog("tap -> focus");
+        sendCmd("{\"cmd\":\"focus\"}");
+        beep(1600, 40);
+      }
+    }
     M5.petScrubbed();
   } else {
     // drain while overlays open, so a stale gesture can't fire later

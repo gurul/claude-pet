@@ -657,11 +657,16 @@ class Daemon:
             return
         cmd = obj.get("cmd")
         if cmd == "focus":
-            # Swipe UP on the permission card: raise the terminal of the
-            # session that is asking. The card stays pending — this is a
-            # look-before-you-decide action, not a decision.
+            # Two senders, same verb. Swipe UP on the permission card carries
+            # the prompt id: raise the terminal of the session that is asking
+            # (the card stays pending — look-before-you-decide, not a
+            # decision). A tap on the pet in attention state carries no id:
+            # resolve the waiting session ourselves (oldest pending
+            # permission, else newest needs-input session).
             from .focus_terminal import focus_session_terminal
             cwd = self._pending_cwds.get(str(obj.get("id") or ""), "")
+            if not cwd:
+                cwd = self.state.attention_cwd()
             log.info("focus: requested for %r", cwd or "(unknown session)")
             asyncio.create_task(focus_session_terminal(cwd))
             return

@@ -78,3 +78,30 @@ def test_first_pending_picks_oldest():
     time.sleep(0.01)
     s.permission_pending("b", "t2", "Edit", "cmd2")
     assert s.first_pending() is p_a
+
+
+def test_attention_cwd_prefers_pending_permission():
+    s = State()
+    s.session_start("a", cwd="/repos/alpha")
+    s.session_start("b", cwd="/repos/beta")
+    s.needs_input("b")
+    s.permission_pending("a", "tid_1", "Bash", "git push", cwd="/repos/alpha")
+    assert s.attention_cwd() == "/repos/alpha"
+
+
+def test_attention_cwd_falls_back_to_newest_needs_input():
+    s = State()
+    s.session_start("a", cwd="/repos/alpha")
+    s.session_start("b", cwd="/repos/beta")
+    s.needs_input("a")
+    s.needs_input("b")   # later flag wins
+    assert s.attention_cwd() == "/repos/beta"
+
+
+def test_attention_cwd_empty_when_nothing_waits():
+    s = State()
+    s.session_start("a", cwd="/repos/alpha")
+    assert s.attention_cwd() == ""
+    s.needs_input("a")
+    s.input_received("a")
+    assert s.attention_cwd() == ""

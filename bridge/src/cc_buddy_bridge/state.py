@@ -173,6 +173,24 @@ class State:
             and (time.monotonic() - s.needs_input_at) < self.NEEDS_INPUT_TTL_SECS
         )
 
+    def attention_cwd(self) -> str:
+        """The cwd behind the pet's attention state — for tap-the-pet focus.
+
+        Priority mirrors what the human sees: the oldest pending permission
+        is the card on screen, so its session wins; otherwise the most
+        recently flagged needs-input session (Claude idle, waiting on a
+        reply in the terminal). Empty when nothing is waiting — focus then
+        degrades to raising whichever terminal app is running.
+        """
+        p = self.first_pending()
+        if p is not None and p.cwd:
+            return p.cwd
+        waiting = [s for s in self.sessions.values() if self._needs_input_live(s)]
+        if waiting:
+            newest = max(waiting, key=lambda s: s.needs_input_at)
+            return newest.cwd or ""
+        return ""
+
     # ---- celebrate pulse ----
 
     def pulse_completed(self, duration_secs: float = 5.0) -> None:

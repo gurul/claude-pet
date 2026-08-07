@@ -37,8 +37,9 @@ Claude Code CLI ─hooks(async)→ unix socket → cc-buddy-bridge daemon ─┬
                                              firmware (fork of claude-desktop-buddy)
                                              data.h NDJSON parser → TamaState → derive() → pet states
                                              touch: swipe card right=approve · left=deny ·
-                                             hold pet=dictate · swipe down=Enter ·
-                                             tap-right=scroll transcript
+                                             swipe card up=focus terminal · tap pet
+                                             (attention)=focus terminal · hold pet=dictate ·
+                                             swipe down=Enter · tap-right=scroll transcript
 ```
 
 ## Firmware port map (M5StickC Plus → FNK0104B)
@@ -77,6 +78,27 @@ instead of the upstream tap-left/tap-right panel:
   distance, with a beep latch at 100%.
 - **Memory:** the card sprite (33KB) allocates on prompt arrival and frees on resolve; if
   allocation fails the card draws directly on the main sprite, untilted, and swiping still works.
+
+## Terminal focus ("take me there")
+
+Two gestures send `{"cmd":"focus"}` board→host; both are look-only and decide nothing:
+
+- **Swipe up on a permission card** carries the prompt id — the daemon resolves the asking
+  session's cwd from `_pending_cwds` and the card stays pending.
+- **Tap the pet in attention state** carries no id — the daemon resolves the waiting session
+  itself (`State.attention_cwd()`): the oldest pending permission's cwd, else the most recently
+  flagged needs-input session's. The tap is gated on `baseState == P_ATTENTION` (not
+  `activeState`, so a one-shot celebrate overlay can't eat it) and stays wake-only in every
+  other state — touching the pet remains functional-only.
+
+`focus_terminal.py` then raises the terminal: iTerm2 and Terminal.app are searched
+window-by-window for the cwd basename in titles (AppleScript); everything else has no scriptable
+window model, so the first *running* app from an ordered activate list is raised app-level —
+Ghostty, Warp (stable + preview), cmux (`com.cmuxterm.app`, id from the vendor repo), Composer
+(by name — no verifiable bundle id), Cursor, VS Code. `CC_BUDDY_FOCUS_APPS` (comma-separated
+names, priority order) replaces that list; names matching a default keep their bundle id,
+unknown names activate by name. Requires macOS Automation permission (prompted once); every
+failure is non-fatal — worst case nothing raises.
 
 ## Diagnostics
 

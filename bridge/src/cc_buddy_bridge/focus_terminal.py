@@ -1,7 +1,10 @@
 """Raise the terminal window running a given session.
 
-Swipe UP on the board's permission card = "show me": the human wants to see
-the session that is asking before deciding. We know the session's cwd; the
+Two gestures land here. Swipe UP on the board's permission card = "show me":
+the human wants to see the session that is asking before deciding. Tap the
+pet while it demands attention = "take me there": a session is blocked on
+input and the human wants the terminal in front. Either way we (usually)
+know the session's cwd; the
 best cross-terminal heuristic is a window whose title mentions the cwd
 basename — Terminal.app titles include the working directory by default, and
 iTerm2 exposes per-session names the same way.
@@ -49,10 +52,10 @@ on run argv
 end run
 '''
 
-# Ghostty and Warp expose no useful AppleScript window model (Warp's is
-# minimal; Ghostty has none), so there is no way to pick the right window by
-# cwd. Activating the app is the honest best effort: it puts the human in the
-# right program, one Cmd+` from the right window.
+# Ghostty, Warp, cmux and friends expose no useful AppleScript window model
+# (Warp's is minimal; Ghostty has none), so there is no way to pick the right
+# window by cwd. Activating the app is the honest best effort: it puts the
+# human in the right program, one Cmd+` from the right window.
 _ACTIVATE_SCRIPT = '''
 on run argv
   tell application id (item 1 of argv) to activate
@@ -60,14 +63,47 @@ on run argv
 end run
 '''
 
-# Bundle ids, tried in order after the AppleScript-capable terminals.
-_ACTIVATE_TARGETS = [
+# Same, but by app name — for apps configured via CC_BUDDY_FOCUS_APPS (or
+# defaults whose bundle id isn't stable) where all we have is the name.
+_ACTIVATE_BY_NAME_SCRIPT = '''
+on run argv
+  tell application (item 1 of argv) to activate
+  return "activated"
+end run
+'''
+
+# (process name for the running check, bundle id or None) tried in order
+# after the AppleScript-capable terminals. None = activate by process name.
+# cmux id from manaflow-ai/cmux's own scripts (stable app; DEV builds append
+# .debug). Composer has no bundle id we could verify — name activation only.
+_DEFAULT_ACTIVATE_TARGETS: list[tuple[str, str | None]] = [
     ("ghostty", "com.mitchellh.ghostty"),
     ("stable", "dev.warp.Warp-Stable"),
     ("Warp", "dev.warp.Warp"),
+    ("cmux", "com.cmuxterm.app"),
+    ("Composer", None),
     ("Cursor", "com.todesktop.230313mzl4w4u92"),
     ("Code", "com.microsoft.VSCode"),
 ]
+
+
+def activate_targets() -> list[tuple[str, str | None]]:
+    """The ordered activate list, overridable via CC_BUDDY_FOCUS_APPS.
+
+    The env var is a comma-separated list of app/process names in priority
+    order (e.g. "Warp,cmux,Composer"). A name matching a default entry keeps
+    its known bundle id; anything else activates by name.
+    """
+    raw = os.environ.get("CC_BUDDY_FOCUS_APPS", "").strip()
+    if not raw:
+        return _DEFAULT_ACTIVATE_TARGETS
+    known = {name.lower(): (name, bid) for name, bid in _DEFAULT_ACTIVATE_TARGETS}
+    targets: list[tuple[str, str | None]] = []
+    for part in raw.split(","):
+        name = part.strip()
+        if name:
+            targets.append(known.get(name.lower(), (name, None)))
+    return targets or _DEFAULT_ACTIVATE_TARGETS
 
 _TERMINAL_SCRIPT = '''
 on run argv
@@ -123,9 +159,12 @@ async def focus_session_terminal(cwd: str) -> None:
             if result:
                 return
         # No scriptable window model — just raise the app that is running.
-        for proc_name, bundle_id in _ACTIVATE_TARGETS:
+        for proc_name, bundle_id in activate_targets():
             if await _app_running(proc_name):
-                result = await _osascript(_ACTIVATE_SCRIPT, bundle_id)
+                if bundle_id is not None:
+                    result = await _osascript(_ACTIVATE_SCRIPT, bundle_id)
+                else:
+                    result = await _osascript(_ACTIVATE_BY_NAME_SCRIPT, proc_name)
                 log.info("focus: activated %s (%s)", proc_name,
                          result or "error")
                 if result:

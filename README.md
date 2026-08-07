@@ -30,6 +30,11 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
   Tap the card for a full-screen view of the whole command; hold it at the right edge to
   approve **and stop being asked** for that command shape (daemon lifetime). Approving a
   read grants its whole enclosing repo for the daemon's lifetime.
+- **Summons your terminal.** Tap the pet while it demands attention and the daemon raises
+  the terminal of the session that's blocked on you (swipe up on a permission card for the
+  same, without deciding). iTerm2 and Terminal.app get window-level matching by the session's
+  cwd; Ghostty, Warp, cmux, Cursor and friends are raised app-level — the order is
+  configurable via `CC_BUDDY_FOCUS_APPS`.
 - **Push-to-talk dictation.** Hold the pet and the daemon holds your dictation app's global
   hotkey until you let go — app-agnostic, it just holds a chord.
 - **Hands-on-pet option picking.** Swipe left/right to walk Claude Code's option pickers
@@ -59,6 +64,8 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 | **Swipe card right / left** | approve / deny the pending prompt |
 | **Hold card at the right edge** (700ms) | stamp flips to ALWAYS — approve and stop carding this command shape for the daemon's lifetime |
 | **Tap the card** | expand to a full-screen view of the whole command (long commands truncate on the card); tap again to close |
+| **Swipe the card up** | raise the asking session's terminal — the card stays pending (look before you decide) |
+| **Tap the pet** (attention state only) | raise the terminal of the session that's blocked on you |
 | **Hold the pet** | push-to-talk: holds your dictation hotkey while held |
 | **Swipe down** (anywhere) | press Enter on the Mac |
 | **Swipe left / right** (no card up) | previous / next option in Claude Code's pickers (Up/Down arrow) |
@@ -119,6 +126,7 @@ never receives session state. Run both.
 | `CC_BUDDY_CLAUDE_CONFIG_DIRS` | `os.pathsep`-separated homes the daemon serves — it runs outside any session, so it can't inherit the above |
 | `CC_BUDDY_VOICE_HOTKEY` | `option` (default and recommended), `opt-space`, or `fn` — prefer rebinding your dictation app to Option over changing this. Bake it in with `install --service --voice-hotkey …`; a hand-edited unit file is wiped by the next `--service` install |
 | `CC_BUDDY_KEY_METHOD` | `osascript` routes Enter through System Events, for apps that swallow synthetic key events (Warp) |
+| `CC_BUDDY_FOCUS_APPS` | comma-separated app names, in priority order, that tap-to-focus raises (e.g. `Warp,cmux,Composer`) — default: Ghostty, Warp, cmux, Composer, Cursor, VS Code |
 
 Installing into the wrong config home **fails silently** — hooks written, board animating,
 no session ever prompting. `status` prints the home it resolved; check it first.
