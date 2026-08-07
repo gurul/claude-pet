@@ -646,7 +646,13 @@ void setup() {
   // during init used to leave the board silent forever while the USB port
   // kept enumerating. Setup's delays total ~3.8s against the 15s budget.
   diagWatchdogBegin();
+  // Phase + ring checkpoints through setup: the 2026-08-05 12:37 plug-in
+  // crash (INT-WDT in the systick handler, systimer never latching) reported
+  // "DIED IN: none" because nothing ever set a phase before loop(). Every
+  // setup death now names the stage it died after.
+  diagPhase(DP_SETUP);
   M5.begin();
+  diagLog("m5.begin done");
   delay(2000);                       // let the host attach before first prints
   diagReport("boot");                // why the last run ended + what it was doing
   Serial.println("[boot] M5.begin done");
@@ -654,6 +660,7 @@ void setup() {
   M5.Imu.Init();
   M5.Beep.begin();
   startBt();
+  diagLog("bt up");
   applyBrightness();
   Serial.println("[boot] bt+brightness done");
   lastInteractMs = millis();
@@ -667,6 +674,7 @@ void setup() {
   Serial.printf("[boot] sprite created=%d psram=%d heap=%u\n",
                 (int)spr.created(), (int)psramFound(), ESP.getFreeHeap());
   characterInit(nullptr);  // scan /characters/ for whatever is installed
+  diagLog("characterInit done");
   Serial.println("[boot] characterInit done");
   gifAvailable = characterLoaded();
   // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
@@ -1018,11 +1026,14 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
+  // RENDER covers every draw path — the GIF branch used to carry no phase at
+  // all, so a hang in characterTick would have blamed "clock face" (the last
+  // phase set before this chain).
+  diagPhase(DP_RENDER);
   if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
-    diagPhase(DP_RENDER);
     buddyTick(activeState);
   } else if (characterLoaded()) {
     characterSetState(activeState);
@@ -1056,6 +1067,10 @@ void loop() {
     else if (clocking) drawClock();
     else if (settings().hud) drawHUD();
     drawMiniClock();
+    // Split phase: every TG0WDT reset of 2026-08-05/06 died in "render",
+    // which conflated the draw code above with this full-frame SPI write.
+    // The next hang names the guilty half.
+    diagPhase(DP_PUSH);
     spr.pushSprite(0, 0);
   }
 
@@ -1064,6 +1079,7 @@ void loop() {
   // Exit needs sustained not-down so IMU noise at the threshold doesn't
   // bounce brightness between 8 and full every few frames.
   static int8_t faceDownFrames = 0;
+  diagPhase(DP_NAP);
   if (!inPrompt) {
     bool down = isFaceDown();
     if (down)       { if (faceDownFrames < 20) faceDownFrames++; }

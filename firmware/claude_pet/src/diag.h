@@ -44,6 +44,12 @@
 enum DiagPhase : uint8_t {
   DP_NONE = 0, DP_SETUP, DP_TOUCH, DP_DATA, DP_STATS, DP_LED, DP_GESTURE,
   DP_PROMPT, DP_RENDER, DP_CLOCK, DP_MENU, DP_SERIAL, DP_IDLE,
+  // Appended (ring phase bytes are positional across flashes — never reorder):
+  DP_PUSH,   // spr.pushSprite — the full-frame SPI write, split out of RENDER
+             // because the 2026-08-05/06 TG0WDT resets all said "render" and
+             // could not distinguish draw code from the SPI push.
+  DP_NAP,    // post-push face-down/power block — IMU over I2C, a real hang
+             // candidate that must not be blamed on the SPI push before it.
 };
 
 inline const char* diagPhaseName(uint8_t p) {
@@ -55,11 +61,13 @@ inline const char* diagPhaseName(uint8_t p) {
     case DP_LED:     return "LED (rgbLedWrite/RMT)";
     case DP_GESTURE: return "gesture handling";
     case DP_PROMPT:  return "prompt/card";
-    case DP_RENDER:  return "render (buddy/sprite push)";
+    case DP_RENDER:  return "render (buddy/HUD draw)";
     case DP_CLOCK:   return "clock face";
     case DP_MENU:    return "menu/overlay";
     case DP_SERIAL:  return "serial write";
     case DP_IDLE:    return "loop end";
+    case DP_PUSH:    return "sprite push (SPI)";
+    case DP_NAP:     return "nap/IMU (I2C)";
     default:         return "none";
   }
 }
