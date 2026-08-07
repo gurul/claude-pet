@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from cc_buddy_bridge.matchers import (
-    derive_always_pattern,
     MatcherConfig,
     classify_command,
+    derive_always_pattern,
     load_config,
 )
 
