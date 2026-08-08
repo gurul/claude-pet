@@ -65,12 +65,19 @@ Claude Code CLI ─hooks→ unix socket → bridge daemon ─NDJSON over USB ser
 A parametric three-part case lives in `case/` — `shell.py` builds it headless in FreeCAD
 and exports STLs to `case/export/`. Frame (bezel + walls, print face down), back cover
 (screw bosses, WS2812 glow window, BOOT/RESET pokeholes, print outer face down), and a
-65° stand dock (print base down). All support-free. Four M3×12 flat-head self-tappers
-enter from the front, pass through the PCB's own mounting holes, and bite into the back
-cover's bosses — board and shell clamp with one screw path. Every rebuild runs a **fit
+65° stand dock (print base down). All support-free. Every rebuild runs a **fit
 proof**: a mock board (PCB, display module, USB body, connector overhangs) must clear
 both shell parts or the build fails. Dimensions came off the real board with calipers;
 see `DESIGN.md` for what's measured vs. derived.
+
+**Current revision: v2** (`case/shell_v2.py` → `frame_v2.stl`, `back_v2.stl`,
+`gauge_v2.stl`). The first print revealed the v1 hole grid was off by >2mm on both
+axes; v2 uses the re-measured grid (77.18 × 41.50 center-to-center) and switches
+fastening to **M3 heat-set inserts** in the back bosses (Ø4.0 × 6.8mm bores, fits
+inserts up to M3×5.7) with M3×14/16 flat-head machine screws from the front. The v1
+stand is unchanged and still fits — don't reprint it. Print the **gauge** first: a
+1.2mm board-footprint plate with the hole grid; lay the bare PCB on it flush and
+confirm daylight through all four holes before committing to the shell print.
 
 ## Controls
 
@@ -179,7 +186,8 @@ launchctl load -w ~/Library/LaunchAgents/com.github.cc-buddy-bridge.daemon.plist
 | `firmware/claude_pet` | the sketch — pet state machine, touch UI, swipe cards, clock, diag ring |
 | `firmware/claude_pet/src/board_compat.*` | the port: shims the `M5StickCPlus.h` API onto this board |
 | `bridge/src/cc_buddy_bridge` | daemon, hooks, serial transport, voice trigger, read policy |
-| `case/shell.py` | parametric 3D-printable shell (FreeCAD headless) — frame + back + stand dock, STLs in `case/export/` |
+| `case/shell_v2.py` | parametric 3D-printable shell, current revision (FreeCAD headless) — frame + back + alignment gauge, heat-set insert bosses, STLs in `case/export/` |
+| `case/shell.py` | v1 shell record (wrong hole grid; superseded) — still the source of the unchanged stand |
 | `tools/flash.sh` | compile + ELF archive + daemon-safe flash in one step |
 | `DESIGN.md` | architecture, board facts, port map, disconnect runbook, and the gotchas worth knowing |
 

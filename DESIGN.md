@@ -145,23 +145,31 @@ Disconnect runbook (from the 2026-08-05 crash-loop investigation):
 
 ## Shell (case/)
 
-`case/shell.py` is a parametric FreeCAD script (run via `freecadcmd`, exports STLs + FCStd to
-`case/export/`). Three parts, all support-free in their print orientations: **frame** (face down —
-bezel + walls; 4× M3×12/14 flat-head self-tappers enter countersinks from the front, ride D-trimmed
-guide standoffs through the PCB holes), **back** (outer face down — bosses seat the PCB, biased
-0.3mm short of the derived PCB plane so stack-estimate error can pull the glass back but never
-crush it into the lip; corner lips register the plate; WS2812 glow window + BOOT/RESET pokeholes),
-**stand** (base down — 65° wedge dock, open cable mouth, no bridges). Portrait, USB-C edge down;
-long walls carry relief pockets for the edge-mounted JST sockets, and the USB notch continues
-through the back-cover edge so chunky cable overmolds (~8.5mm) pass.
+`case/shell_v2.py` is the current parametric FreeCAD script (run via `freecadcmd`, exports STLs +
+FCStd to `case/export/`; `case/shell.py` is the superseded v1 record). Parts, all support-free in
+their print orientations: **frame** (face down — bezel + walls; 4× M3×14/16 flat-head machine
+screws enter countersinks from the front, ride D-trimmed guide standoffs through the PCB holes),
+**back** (outer face down — bosses seat the PCB, biased 0.3mm short of the derived PCB plane so
+stack-estimate error can pull the glass back but never crush it into the lip; each boss carries a
+Ø4.0 × 6.8mm blind bore for an **M3 heat-set insert**, pressed flush from the boss top, up to
+M3×5.7 with 0.4mm outer skin left; corner lips register the plate; WS2812 glow window +
+BOOT/RESET pokeholes), **gauge** (a 1.2mm board-footprint plate with the hole grid — print it
+first and verify the bare PCB's holes show daylight before printing the shell), **stand** (v1,
+unchanged and still fits — base down, 65° wedge dock, open cable mouth; shell_v2 asserts the
+outer envelope is unchanged so a future edit that breaks stand fit fails the build). Portrait,
+USB-C edge down; long walls carry relief pockets for the edge-mounted JST sockets, and the USB
+notch continues through the back-cover edge so chunky cable overmolds (~8.5mm) pass.
 
 **The script proves fit on every build**: a mock board (PCB + display module + USB body + JST
 overhangs + measured component envelope with hole keep-outs) must intersect neither shell part or
 the build asserts. Measured 2026-08-07: board 85.95×50.99, glass 69.69×50.11, back envelope 10.66
-(glass→tallest component; the earlier 9.50 was discarded), hole grid 74.95×39.59, USB-C 9.10 wide
-+1.45 toward BOOT. Derived: PCB plane at 7.46 (envelope − 3.2 USB body). Eyeballed, oversized to
-absorb error: button/mic/LED positions. The `freecad` MCP server is registered in `.mcp.json` for
-live-in-GUI iteration.
+(glass→tallest component; the earlier 9.50 was discarded), USB-C 9.10 wide +1.45 toward BOOT.
+Re-measured after the first print (whose holes were off): hole grid **77.18×41.50**
+center-to-center (v1's 74.95×39.59 was >2mm wrong on both axes), edge→hole-edge 2.43 (cross-check;
+disagrees with the direct pitch reading by ~0.7mm, which is why the gauge part and the +0.2 slop
+in the frame's screw bores exist), PCB seat 1.69 thick. Derived: PCB plane at 7.46 (envelope −
+3.2 USB body). Eyeballed, oversized to absorb error: button/mic/LED positions. The `freecad` MCP
+server is registered in `.mcp.json` for live-in-GUI iteration.
 
 ## Gotchas
 
